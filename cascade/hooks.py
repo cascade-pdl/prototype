@@ -130,18 +130,39 @@ def _relabel(obj: Any, rename: dict[str, str]) -> Any:
 # --------------------------------------------------------------------------- #
 # The two hooks, composed. These are what the engine/runner invoke at the
 # data-plane boundary (node-side).
+#
+# Binary blobs are opaque: bytes + a media type, no fields. So for a binary
+# port the hooks SKIP codec and field-mapping entirely and pass bytes through
+# unchanged — there is no JSON/CSV for a PNG, and no field to rename. The media
+# type travels as metadata, not in the bytes.
 # --------------------------------------------------------------------------- #
-def to_container(canonical_bytes: bytes, local_encoding: str, mapping: dict[str, str]) -> bytes:
-    """Input hook: canonical JSON bytes from the store -> bytes in the
-    container's local encoding + local field names."""
+def to_container(canonical_bytes: bytes, local_encoding: str, mapping: dict[str, str],
+                 is_binary: bool = False) -> bytes:
+    """Input hook: canonical bytes from the store -> bytes for the container.
+
+    For a structured port: decode canonical JSON, relabel canonical->local
+    names, re-encode to the container's local format.
+    For a binary port: pass the bytes through unchanged (no decode, no relabel,
+    no re-encode) — the container reads the raw blob (e.g. the PNG) directly.
+    """
+    if is_binary:
+        return canonical_bytes
     obj = decode(canonical_bytes, "json")           # store is always canonical JSON
     obj = relabel_canonical_to_local(obj, mapping)  # type-preserving rename
     return encode(obj, local_encoding)              # re-encode to the node's format
 
 
-def from_container(local_bytes: bytes, local_encoding: str, mapping: dict[str, str]) -> bytes:
-    """Output hook: bytes the container produced (local encoding + local names)
-    -> canonical JSON bytes for the store."""
+def from_container(local_bytes: bytes, local_encoding: str, mapping: dict[str, str],
+                   is_binary: bool = False) -> bytes:
+    """Output hook: bytes the container produced -> canonical bytes for the store.
+
+    For a structured port: parse the node's format, relabel local->canonical,
+    re-encode to canonical JSON.
+    For a binary port: pass the bytes through unchanged — the blob is stored
+    as-is, its media type carried as metadata.
+    """
+    if is_binary:
+        return local_bytes
     obj = decode(local_bytes, local_encoding)       # parse the node's format
     obj = relabel_local_to_canonical(obj, mapping)  # rename back to canonical
     return encode(obj, "json")                       # store is always canonical JSON

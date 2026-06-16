@@ -40,6 +40,7 @@ class InstanceRecord:
     instance_key: str
     status: str                       # complete | failed
     output_key: str | None = None
+    output_media_type: str | None = None  # set for binary blob outputs
     output_cardinality: int | None = None
     item_keys: list[str] = field(default_factory=list)
     exit_code: int | None = None
@@ -178,22 +179,41 @@ class Engine:
 
     def _build_port_plan(self, node: PlanNode, ref, input_keys: dict[str, str]) -> dict:
         """Associate each input binding with its port's local encoding + field
-        mapping, and resolve the single output port's encoding + mapping. Used
-        by the hooked runner to translate canonical store data <-> the
-        container's local format and names."""
+        mapping (or a binary flag), and resolve the output port. Used by the
+        hooked runner to translate canonical store data <-> the container's
+        local format and names — or, for binary ports, to pass bytes through."""
+        from .types import parse_type
         inputs = {}
         for binding, key in input_keys.items():
             port = self._match_port(ref.input, binding)
+            is_binary = False
+            media = None
+            if port is not None:
+                try:
+                    pt = parse_type(port.type)
+                    is_binary, media = pt.is_binary, pt.media_type
+                except Exception:
+                    pass
             inputs[binding] = {
                 "key": key,
-                "encoding": ref.port_encoding(port) if port else ref.encoding,
-                "mapping": port.mapping if port else {},
+                "encoding": (ref.port_encoding(port) if port else ref.encoding),
+                "mapping": (port.mapping if port else {}),
+                "binary": is_binary,
+                "media_type": media,
             }
-        # output: single declared output port (the common case)
         out_port = ref.output[0] if ref.output else None
+        out_binary, out_media = False, None
+        if out_port is not None:
+            try:
+                ot = parse_type(out_port.type)
+                out_binary, out_media = ot.is_binary, ot.media_type
+            except Exception:
+                pass
         output = {
-            "encoding": ref.port_encoding(out_port) if out_port else ref.encoding,
-            "mapping": out_port.mapping if out_port else {},
+            "encoding": (ref.port_encoding(out_port) if out_port else ref.encoding),
+            "mapping": (out_port.mapping if out_port else {}),
+            "binary": out_binary,
+            "media_type": out_media,
         }
         return {"inputs": inputs, "output": output}
 
@@ -251,7 +271,12 @@ class Engine:
         # read the node-reported metadata blob (control plane reads metadata,
         # never the payload itself)
         meta = self._read_manifest(manifest_key, default_output_prefix=output_prefix)
-        inst.output_key = meta.get("output_key") or f"{output_prefix}/output.json"
+        # the default output key depends on the output kind: binary nodes store a
+        # raw blob at output.blob; structured nodes store canonical JSON.
+        out_is_binary = ports.get("output", {}).get("binary", False)
+        default_out = f"{output_prefix}/output.blob" if out_is_binary else f"{output_prefix}/output.json"
+        inst.output_key = meta.get("output_key") or default_out
+        inst.output_media_type = ports.get("output", {}).get("media_type") if out_is_binary else None
         inst.output_cardinality = meta.get("output_cardinality")
         inst.item_keys = meta.get("item_keys", [])
         inst.status = "complete"

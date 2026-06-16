@@ -162,15 +162,26 @@ class HookedRunner(Runner):
         local_inputs: dict[str, str] = {}
         for binding, p in ports.get("inputs", {}).items():
             canonical = self.store.get(p["key"])
-            local_bytes = hooks.to_container(canonical, p.get("encoding", "json"), p.get("mapping") or {})
-            local_path = self.local_dir / f"{spec.node_id}_{spec.instance_key}_{binding}".replace("/", "_")
+            is_bin = p.get("binary", False)
+            local_bytes = hooks.to_container(
+                canonical, p.get("encoding", "json"), p.get("mapping") or {}, is_binary=is_bin
+            )
+            ext = _ext_for(is_bin, p.get("media_type"), p.get("encoding", "json"))
+            local_path = self.local_dir / (
+                f"{spec.node_id}_{spec.instance_key}_{binding}{ext}".replace("/", "_")
+            )
             Path(local_path).write_bytes(local_bytes)
             local_inputs[binding] = str(local_path)
 
         # tell the inner runner / container where the local input files are and
         # where to write its local output
+        out_is_bin = ports.get("output", {}).get("binary", False)
         out_enc = ports.get("output", {}).get("encoding", "json")
-        local_out = self.local_dir / f"{spec.node_id}_{spec.instance_key}_out.{out_enc}".replace("/", "_")
+        out_media = ports.get("output", {}).get("media_type")
+        out_ext = _ext_for(out_is_bin, out_media, out_enc)
+        local_out = self.local_dir / (
+            f"{spec.node_id}_{spec.instance_key}_out{out_ext}".replace("/", "_")
+        )
         inner_env = dict(spec.env)
         inner_env["CASCADE_LOCAL_INPUTS"] = _json.dumps(local_inputs)
         inner_env["CASCADE_LOCAL_OUTPUT"] = str(local_out)
@@ -186,9 +197,41 @@ class HookedRunner(Runner):
         # --- output hook: container's local output -> canonical store ---
         out_mapping = ports.get("output", {}).get("mapping") or {}
         output_prefix = spec.env["CASCADE_OUTPUT_PREFIX"]
-        canonical_key = f"{output_prefix}/output.json"
+        # Uniform, predictable store key regardless of kind: structured outputs
+        # are canonical JSON at output.json; binary blobs are raw bytes at
+        # output.blob, with the media type recorded as metadata (in the manifest),
+        # NOT encoded in the key — so retrieval is uniform and the engine always
+        # knows where to look.
+        canonical_key = (
+            f"{output_prefix}/output.blob" if out_is_bin else f"{output_prefix}/output.json"
+        )
         if Path(local_out).exists():
             local_bytes = Path(local_out).read_bytes()
-            canonical_bytes = hooks.from_container(local_bytes, out_enc, out_mapping)
+            canonical_bytes = hooks.from_container(
+                local_bytes, out_enc, out_mapping, is_binary=out_is_bin
+            )
             self.store.put(canonical_key, canonical_bytes)
+            # record the blob's media type as metadata alongside the output
+            if out_is_bin:
+                meta_key = f"{output_prefix}/_blob_meta.json"
+                self.store.put_json(meta_key, {
+                    "media_type": ports.get("output", {}).get("media_type"),
+                    "output_key": canonical_key,
+                })
         return 0
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+def _ext_for(is_binary: bool, media_type: str | None, encoding: str) -> str:
+    """Pick a local file extension for the staged file. For binary blobs, derive
+    it from the media subtype (image/png -> .png); for structured data, from the
+    encoding (json/csv)."""
+    if is_binary:
+        if media_type and "/" in media_type:
+            sub = media_type.split("/", 1)[1]
+            if sub and sub != "*":
+                return f".{sub}"
+        return ".bin"
+    return f".{encoding}"

@@ -35,14 +35,20 @@ class TypeError_(Exception):
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class TypeExpr:
-    base: str                 # primitive ("int") or named ("ecology.Detection")
+    base: str                 # primitive ("int"), named ("Detection"), or "binary"
     format: str | None = None # the <...> modifier on a primitive
     array_dims: int = 0       # number of trailing []
     nullable: bool = False    # trailing ?
+    media_type: str | None = None  # for binary blobs: "image/png", "image/*", or None (=*/*)
 
     @property
     def is_primitive(self) -> bool:
         return self.base in PRIMITIVES
+
+    @property
+    def is_binary(self) -> bool:
+        """An opaque blob: bytes + a media type. No fields, no codec, no rename."""
+        return self.base == "binary"
 
     @property
     def is_array(self) -> bool:
@@ -52,15 +58,17 @@ class TypeExpr:
         """The element type when one [] is removed (scatter)."""
         if self.array_dims == 0:
             raise TypeError_(f"cannot take element of non-array type '{self}'")
-        return TypeExpr(self.base, self.format, self.array_dims - 1, self.nullable)
+        return TypeExpr(self.base, self.format, self.array_dims - 1, self.nullable, self.media_type)
 
     def arrayed(self) -> "TypeExpr":
         """This type wrapped in one more [] (gather)."""
-        return TypeExpr(self.base, self.format, self.array_dims + 1, False)
+        return TypeExpr(self.base, self.format, self.array_dims + 1, False, self.media_type)
 
     def __str__(self) -> str:
         s = self.base
-        if self.format:
+        if self.is_binary and self.media_type:
+            s += f"<{self.media_type}>"
+        elif self.format:
             s += f"<{self.format}>"
         s += "[]" * self.array_dims
         if self.nullable:
@@ -71,12 +79,16 @@ class TypeExpr:
 _TYPE_RE = re.compile(
     r"""^
     (?P<base>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)
-    (?:<(?P<format>[A-Za-z0-9_]+)>)?
+    (?:<(?P<qualifier>[^>]+)>)?
     (?P<arrays>(?:\[\])*)
     (?P<nullable>\?)?
     $""",
     re.VERBOSE,
 )
+
+# a media type is "type/subtype" where subtype may be "*"; type may not be "*"
+# unless the whole thing is "*/*". (image/png, image/*, */* are valid; */png not.)
+_MEDIA_RE = re.compile(r"^(?:\*/\*|[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/(?:\*|[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*))$")
 
 
 def parse_type(s: str) -> TypeExpr:
@@ -87,12 +99,32 @@ def parse_type(s: str) -> TypeExpr:
     if not m:
         raise TypeError_(f"malformed type expression: '{s}'")
     base = m.group("base")
-    fmt = m.group("format")
+    qualifier = m.group("qualifier")
     dims = len(m.group("arrays")) // 2
     nullable = m.group("nullable") is not None
-    if fmt and base not in PRIMITIVES:
-        raise TypeError_(f"format <{fmt}> is only valid on primitives, not '{base}'")
-    return TypeExpr(base=base, format=fmt, array_dims=dims, nullable=nullable)
+
+    if base == "binary":
+        # binary               -> any bytes (media_type None, i.e. */*)
+        # binary<image/png>    -> exact media type
+        # binary<image/*>      -> wildcard subtype
+        media = None
+        if qualifier is not None:
+            if not _MEDIA_RE.match(qualifier):
+                raise TypeError_(
+                    f"invalid media type '{qualifier}' in binary<{qualifier}> "
+                    f"(expected 'type/subtype', 'type/*', or '*/*'; '*/subtype' is not allowed)"
+                )
+            media = qualifier
+        return TypeExpr(base="binary", format=None, array_dims=dims,
+                        nullable=nullable, media_type=media)
+
+    # non-binary: a <qualifier> is a primitive format and may not contain '/'
+    if qualifier is not None:
+        if base not in PRIMITIVES:
+            raise TypeError_(f"format <{qualifier}> is only valid on primitives, not '{base}'")
+        if "/" in qualifier:
+            raise TypeError_(f"'/' is only valid in a binary media type, not in <{qualifier}>")
+    return TypeExpr(base=base, format=qualifier, array_dims=dims, nullable=nullable)
 
 
 # --------------------------------------------------------------------------- #
@@ -154,13 +186,20 @@ class TypeRegistry:
         return False
 
     def satisfies(self, sub: TypeExpr, sup: TypeExpr) -> bool:
-        """Does a value of type ``sub`` satisfy an input expecting ``sup``?"""
+        """Does a value of type ``sub`` (the producer/output) satisfy an input
+        expecting ``sup`` (the consumer)?"""
         # array dimensions must match
         if sub.array_dims != sup.array_dims:
             return False
         # nullability: a non-nullable satisfies a nullable, not the reverse
         if sub.nullable and not sup.nullable:
             return False
+        # binary blobs: media-type compatibility (directional, see _media_satisfies).
+        # binary and non-binary are never compatible with each other.
+        if sub.is_binary or sup.is_binary:
+            if not (sub.is_binary and sup.is_binary):
+                return False
+            return _media_satisfies(sub.media_type, sup.media_type)
         # primitives
         if sub.is_primitive or sup.is_primitive:
             if sub.base != sup.base:
@@ -174,13 +213,46 @@ class TypeRegistry:
         return self.is_subtype_named(sub.base, sup.base)
 
 
+def _media_satisfies(out: str | None, inp: str | None) -> bool:
+    """Directional media-type compatibility for binary blobs.
+
+    ``out`` is the producer's media type, ``inp`` the consumer's. A specific
+    output satisfies a wider (wildcard) input, but a wide output does NOT
+    satisfy a more specific input (that would be unsafe narrowing).
+
+    None means '*/*' (any). Examples:
+      out=image/png  inp=image/*   -> True   (a PNG is an image)
+      out=image/png  inp=image/png -> True   (exact)
+      out=image/*    inp=image/png -> False  (producer might emit non-PNG)
+      out=image/png  inp=audio/*   -> False  (different type)
+      out=image/png  inp=None(*/*) -> True   (consumer accepts anything)
+      out=None(*/*)  inp=image/png -> False  (producer could be anything)
+    """
+    out = out or "*/*"
+    inp = inp or "*/*"
+    o_type, o_sub = out.split("/")
+    i_type, i_sub = inp.split("/")
+    # consumer type must accept producer type
+    if i_type != "*" and i_type != o_type:
+        return False
+    # if consumer accepts any type (*), it accepts this one
+    if i_type == "*":
+        # only an any-type input accepts an any-type output; otherwise fine
+        return True
+    # types match; check subtype
+    if i_sub == "*":
+        return True              # consumer accepts any subtype of this type
+    if o_sub == "*":
+        return False             # producer is unspecific, consumer wants exact -> unsafe
+    return o_sub == i_sub        # both specific: must match exactly
+
+
 # --------------------------------------------------------------------------- #
 # Edge transforms
 # --------------------------------------------------------------------------- #
 @dataclass
 class EdgeWarning:
     message: str
-
 
 def transform_for(mode: str, downstream_scatters: bool) -> str:
     """Which transform an edge applies. ``gather`` wraps T -> T[]; a scatter on
