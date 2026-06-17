@@ -128,10 +128,21 @@ class RunState:
 
 
 class Engine:
-    def __init__(self, pipeline: Pipeline, store: Store, runner: Runner):
+    def __init__(self, pipeline: Pipeline, store: Store, runner=None, *, runners=None):
+        """``runners`` is a RunnerRegistry (resolves per-ref runner kind). For
+        backward compatibility, a single ``runner`` may be passed instead and is
+        used for every node regardless of kind."""
         self.pipeline = pipeline
         self.store = store
-        self.runner = runner
+        self.runner = runner          # single-runner fallback (tests/demos)
+        self.runners = runners        # RunnerRegistry (per-ref dispatch)
+
+    def _runner_for(self, ref):
+        """Resolve the runner for a ref: the registry by kind, else the single
+        fallback runner."""
+        if self.runners is not None:
+            return self.runners.get(ref.runner.kind)
+        return self.runner
 
     def run(self, plan: ExecutionPlan, inputs: dict[str, str], run_id: str | None = None) -> RunState:
         run_id = run_id or f"run-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
@@ -282,9 +293,11 @@ class Engine:
             "CASCADE_PORTS": json.dumps(ports),
         }
         spec = RunSpec(run_id=run_id, node_id=node.id, instance_key=ikey.render(),
-                       image=ref.image, env=env)
+                       image=ref.image, env=env,
+                       runner_config=ref.runner.config)
 
-        exit_code = self.runner.run(spec)
+        runner = self._runner_for(ref)
+        exit_code = runner.run(spec)
         inst.exit_code = exit_code
         inst.completed_at = time.time()
         if exit_code != 0:

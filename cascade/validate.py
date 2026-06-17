@@ -145,12 +145,15 @@ def _resolve_input_port(ref, binding: str | None):
 # --------------------------------------------------------------------------- #
 def validate_refs(pipeline: Pipeline) -> ValidationReport:
     report = ValidationReport(phase="refs")
+    from .runners_config import RunnerKind
     for ref in pipeline.refs:
         loc = f"ref '{ref.name}'"
         if not ref.image:
             report.error("no-image", loc, "no image declared")
-        if ref.runner not in {"subprocess", "ecs-task", "local"}:
-            report.error("bad-runner", loc, f"unknown runner '{ref.runner}'")
+        # ref.runner is a RunnerSpec; its kind is a RunnerKind enum member (the
+        # loader already rejects unknown kinds, but check defensively)
+        if not isinstance(ref.runner.kind, RunnerKind):
+            report.error("bad-runner", loc, f"unknown runner kind '{ref.runner.kind}'")
         # well-formedness of declared types
         for io in (*ref.input, *ref.output):
             try:

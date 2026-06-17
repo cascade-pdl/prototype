@@ -26,10 +26,10 @@ from .model import (
     NamedDag,
     Pipeline,
     Ref,
-    RunnerConfig,
     Structure,
     TypesSection,
 )
+from .runners_config import RunnerKind, RunnerSpec, parse_node_config
 
 
 class LoadError(Exception):
@@ -75,26 +75,57 @@ def _load_input(raw: dict[str, Any]) -> InputDecl:
 def _load_ref(raw: dict[str, Any]) -> Ref:
     if "image" not in raw:
         raise LoadError(f"ref '{raw.get('name', '?')}' must declare an 'image' (pre-built container)")
-    rc = None
-    if raw.get("runner_config"):
-        c = raw["runner_config"]
-        known = {"cpu", "memory", "timeout", "task_definition"}
-        rc = RunnerConfig(
-            cpu=c.get("cpu"),
-            memory=c.get("memory"),
-            timeout=c.get("timeout"),
-            task_definition=c.get("task_definition"),
-            extra={k: v for k, v in c.items() if k not in known},
-        )
+    runner_spec = _load_runner(raw)
     return Ref(
         name=raw["name"],
         image=raw["image"],
-        runner=raw.get("runner", "subprocess"),
+        runner=runner_spec,
         encoding=raw.get("encoding", "json"),
-        runner_config=rc,
         input=[_load_io(i) for i in (raw.get("input") or [])],
         output=[_load_io(o) for o in (raw.get("output") or [])],
     )
+
+
+def _load_runner(raw: dict[str, Any]) -> RunnerSpec:
+    """Parse a ref's runner. Accepts:
+      runner: subprocess                         (bare kind string)
+      runner: {kind: ecs-task, config: {...}}    (structured)
+      runner: ecs-task + runner_config: {...}    (kind + sibling config block)
+    """
+    r = raw.get("runner", "subprocess")
+    sibling_cfg = raw.get("runner_config")
+
+    if isinstance(r, str):
+        try:
+            kind = RunnerKind(r)
+        except ValueError:
+            raise LoadError(
+                f"ref '{raw.get('name','?')}' has unknown runner '{r}'; "
+                f"valid: {[k.value for k in RunnerKind]}"
+            )
+        try:
+            cfg = parse_node_config(kind, sibling_cfg)
+        except ValueError as e:
+            raise LoadError(f"ref '{raw.get('name','?')}': {e}")
+        return RunnerSpec(kind=kind, config=cfg)
+
+    if isinstance(r, dict):
+        kind_str = r.get("kind")
+        try:
+            kind = RunnerKind(kind_str)
+        except ValueError:
+            raise LoadError(
+                f"ref '{raw.get('name','?')}' has unknown runner kind '{kind_str}'; "
+                f"valid: {[k.value for k in RunnerKind]}"
+            )
+        cfg_raw = r.get("config") or sibling_cfg
+        try:
+            cfg = parse_node_config(kind, cfg_raw)
+        except ValueError as e:
+            raise LoadError(f"ref '{raw.get('name','?')}': {e}")
+        return RunnerSpec(kind=kind, config=cfg)
+
+    raise LoadError(f"ref '{raw.get('name','?')}' has invalid runner: {r!r}")
 
 
 def _load_io(raw: dict[str, Any]) -> IoDecl:

@@ -83,15 +83,35 @@ def cmd_run(args) -> int:
             return 1
         extra_args += ["-e", env_item]
     for raw in args.docker_arg or []:
-        # split on whitespace so a single --docker-arg "-v a:b" becomes two tokens
         extra_args += raw.split()
 
-    runner = EchoRunner() if args.dry_run else SubprocessRunner(
-        store_root=args.store,
-        store_mount=args.store_mount,  # optional explicit override
-        extra_args=extra_args,
-    )
-    engine = Engine(pipeline, store, runner)
+    if args.dry_run:
+        engine = Engine(pipeline, store, EchoRunner())
+        state = engine.run(plan, inputs, run_id=args.run_id)
+        print(f"\nrun {state.run_id}: {state.status}")
+        return 0 if state.status == "complete" else 1
+
+    # deployment config: from --runner-config file (YAML) if given, else empty
+    import yaml as _yaml
+    from .runners_config import DeploymentConfig, RunnerKind
+    from .runner import RunnerRegistry, check_deployment_satisfies
+    deploy_raw = None
+    if args.runner_config:
+        deploy_raw = _yaml.safe_load(open(args.runner_config))
+    deployment = DeploymentConfig.from_dict(deploy_raw)
+
+    # fail fast: does this deployment satisfy every runner kind the pipeline needs?
+    required = {r.runner.kind for r in pipeline.refs}
+    problems = check_deployment_satisfies(required, deployment)
+    if problems:
+        print("refusing to run: deployment does not satisfy required runners:")
+        for p in problems:
+            print(f"  - {p}")
+        return 1
+
+    registry = RunnerRegistry(deployment, store_root=args.store,
+                              subprocess_extra_args=extra_args)
+    engine = Engine(pipeline, store, runners=registry)
     state = engine.run(plan, inputs, run_id=args.run_id)
     print(f"\nrun {state.run_id}: {state.status}")
     print(f"run state: runs/{state.run_id}/_run_state.json (in {args.store})")
@@ -149,6 +169,9 @@ def main(argv=None) -> int:
                        help="env var passed into the container as NAME=VALUE, repeatable. "
                             "e.g. --docker-env AWS_PROFILE=wilder-sensing-develop")
     p_run.add_argument("--run-id", default=None)
+    p_run.add_argument("--runner-config", default=None,
+                       help="deployment config YAML (ECS cluster, etc.) — per-environment, "
+                            "kept out of the pipeline")
     p_run.add_argument("--dry-run", action="store_true", help="use the echo runner, launch nothing")
     p_run.set_defaults(func=cmd_run)
 

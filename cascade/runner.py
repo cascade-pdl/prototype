@@ -36,6 +36,9 @@ class RunSpec:
     instance_key: str
     image: str
     env: dict[str, str] = field(default_factory=dict)
+    # per-node config from the ref (cpu/memory/etc.) — a NodeRunnerConfig.
+    # The runner reads what it understands (EcsTaskRunner uses cpu/memory).
+    runner_config: object = None
 
 
 class Runner(ABC):
@@ -88,24 +91,58 @@ class SubprocessRunner(Runner):
         return proc.returncode
 
 
-class EcsRunner(Runner):
-    """Launches the node as an ECS task and polls until it stops. Stubbed —
-    wire up boto3 ``run_task`` + ``describe_tasks`` for scaled fan-out.
+class EcsTaskRunner(Runner):
+    """Launches the node as an ECS task and polls until it stops.
 
-    Same interface as :class:`SubprocessRunner`; the engine doesn't care which
-    backend runs a node, which is what lets the moth pipeline scale to 100
-    concurrent tasks without changing anything above the runner.
+    Constructed with **deployment** config (the ECS cluster, region, role,
+    networking — supplied at run time, not from the pipeline). Each ``run`` reads
+    the node's **per-node** config (cpu/memory) from ``spec.runner_config``. So
+    one EcsTaskRunner instance serves all ECS nodes; each task gets its own
+    resources from its ref.
+
+    The boto3 calls are sketched but guarded — wire them up and test against real
+    ECS. This keeps the structure correct and the dependency (boto3) lazy.
     """
 
-    def __init__(self, cluster: str, region: str, poll_interval: float = 5.0):
-        self.cluster = cluster
-        self.region = region
+    def __init__(self, deployment, poll_interval: float = 5.0):
+        # deployment: cascade.runners_config.EcsDeployment
+        self.deployment = deployment
         self.poll_interval = poll_interval
 
-    def run(self, spec: RunSpec) -> int:  # pragma: no cover - stub
-        # boto3 ecs.run_task(... containerOverrides=[{environment: spec.env}] ...)
-        # then poll describe_tasks until STOPPED, read the container exit code.
-        raise NotImplementedError("EcsRunner.run: wire up boto3 run_task/describe_tasks")
+    def run(self, spec: RunSpec) -> int:  # pragma: no cover - needs real ECS
+        import boto3  # lazy; only needed when actually running on ECS
+        cfg = spec.runner_config  # EcsTaskNodeConfig (cpu/memory/timeout)
+        cpu = getattr(cfg, "cpu", None)
+        memory = getattr(cfg, "memory", None)
+
+        ecs = boto3.client("ecs", region_name=self.deployment.region)
+        env_overrides = [{"name": k, "value": v} for k, v in spec.env.items()]
+        container_override = {"name": spec.node_id, "environment": env_overrides}
+        if cpu:
+            container_override["cpu"] = cpu
+        if memory:
+            container_override["memory"] = memory
+
+        # NB: this assumes a task definition exists that references spec.image,
+        # or you register one per image. Left as the real-ECS wiring point.
+        resp = ecs.run_task(
+            cluster=self.deployment.cluster,
+            launchType="FARGATE",
+            overrides={"containerOverrides": [container_override]},
+            networkConfiguration={
+                "awsvpcConfiguration": {
+                    "subnets": self.deployment.subnets,
+                    "securityGroups": self.deployment.security_groups,
+                    "assignPublicIp": "ENABLED",
+                }
+            } if self.deployment.subnets else {},
+            # taskDefinition=... ,  # supply per your task-def strategy
+        )
+        # poll describe_tasks until STOPPED, read container exit code... (wire up)
+        raise NotImplementedError(
+            "EcsTaskRunner.run: structure is in place; complete the run_task "
+            "task-definition strategy and describe_tasks polling against real ECS"
+        )
 
 
 class EchoRunner(Runner):
@@ -254,3 +291,83 @@ def _ext_for(is_binary: bool, media_type: str | None, encoding: str) -> str:
                 return f".{sub}"
         return ".bin"
     return f".{encoding}"
+
+
+# --------------------------------------------------------------------------- #
+# Runner registry: resolve a RunnerKind to a (lazily-built, cached) Runner
+# instance, configured with the deployment config for this environment.
+# --------------------------------------------------------------------------- #
+class RunnerRegistry:
+    """Resolves a RunnerKind to a Runner instance, building each lazily from the
+    deployment config and caching it (so expensive init — boto3 sessions, etc. —
+    happens once per kind, not per node instance).
+
+    Deployment config is per-environment and supplied at construction; it is NOT
+    part of the pipeline. The pipeline only declares *which kind* each ref needs;
+    this registry supplies the *configured instance* for the current deployment.
+
+    For local subprocess runs the store must be reachable inside the container,
+    so the registry is also given the store_root (the host FileStore dir) and any
+    base docker args (e.g. credential mounts) to apply to subprocess runs.
+    """
+
+    def __init__(self, deployment, store_root: str | None = None,
+                 subprocess_extra_args: list[str] | None = None):
+        from .runners_config import RunnerKind
+        self.deployment = deployment
+        self.store_root = store_root
+        self.subprocess_extra_args = subprocess_extra_args or []
+        self._cache: dict = {}
+        self._RunnerKind = RunnerKind
+
+    def get(self, kind) -> Runner:
+        if kind in self._cache:
+            return self._cache[kind]
+        runner = self._build(kind)
+        self._cache[kind] = runner
+        return runner
+
+    def _build(self, kind) -> Runner:
+        K = self._RunnerKind
+        if kind == K.echo:
+            return EchoRunner()
+        if kind == K.subprocess:
+            extra = list(self.subprocess_extra_args)
+            if self.deployment and self.deployment.subprocess:
+                extra = self.deployment.subprocess.extra_args + extra
+                container_store = self.deployment.subprocess.container_store
+                no_pull = self.deployment.subprocess.no_pull
+            else:
+                container_store, no_pull = "/store", True
+            return SubprocessRunner(
+                store_root=self.store_root,
+                container_store=container_store,
+                no_pull=no_pull,
+                extra_args=extra,
+            )
+        if kind == K.ecs_task:
+            if not (self.deployment and self.deployment.ecs):
+                raise RunnerError(
+                    "pipeline requires runner kind 'ecs-task' but the deployment "
+                    "config provides no 'ecs' section (cluster, region, ...)"
+                )
+            return EcsTaskRunner(self.deployment.ecs)
+        raise RunnerError(f"no runner implementation for kind '{kind}'")
+
+
+class RunnerError(Exception):
+    pass
+
+
+def check_deployment_satisfies(required_kinds, deployment) -> list[str]:
+    """Return a list of human-readable problems if the deployment can't satisfy
+    the required runner kinds. Empty list = OK. Used for fail-fast validation
+    before a run starts."""
+    problems = []
+    for kind in required_kinds:
+        if not deployment.provides(kind):
+            problems.append(
+                f"pipeline requires runner kind '{getattr(kind, 'value', kind)}' "
+                f"but the deployment config does not provide it"
+            )
+    return problems

@@ -71,47 +71,46 @@ class IoDecl:
 
 
 @dataclass
-class RunnerConfig:
-    """Optional per-ref runner hints. Interpreted by the runner, not the core."""
-    cpu: int | None = None
-    memory: int | None = None
-    timeout: float | None = None
-    task_definition: str | None = None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
 class Ref:
     """An executable artefact. For now: a pre-built container image plus a
     declared input/output contract.
 
+    ``runner`` is a :class:`~cascade.runners_config.RunnerSpec`: the runner kind
+    (subprocess | ecs-task | echo) plus optional *per-node* config (cpu/memory).
+    Deployment wiring (which ECS cluster, etc.) is NOT here — it is supplied at
+    run time so the pipeline stays portable.
+
     ``encoding`` is the default node-local serialization for all of this ref's
     ports (overridable per-port via :class:`IoDecl.encoding`). The data plane
     itself always stores the *canonical* encoding (JSON); the node's hooks
-    translate between canonical and the node's port encoding at the boundary,
-    so the container only ever sees its own format and field names.
+    translate between canonical and the node's port encoding at the boundary.
 
     YAML::
 
         refs:
           - name: flat-bug
             image: 123456789.dkr.ecr.eu-west-1.amazonaws.com/flat-bug:v3
-            runner: subprocess          # subprocess | ecs-task
-            encoding: csv               # this container reads/writes CSV locally
+            runner: ecs-task            # bare kind, or a {kind, config} mapping
+            runner_config:              # per-node intrinsic needs (cpu/memory)
+              cpu: 2048
+              memory: 8192
+            encoding: csv
             input:
               - { name: image, type: "io.Image" }
             output:
-              - name: detections
-                type: "ecology.Detection[]"
-                mapping: { x: px, y: py }   # canonical x/y -> container's px/py
+              - { name: detections, type: "ecology.Detection[]" }
     """
     name: str
     image: str
-    runner: str = "subprocess"
+    runner: "RunnerSpec" = None  # type: ignore[assignment]
     encoding: str = "json"
-    runner_config: RunnerConfig | None = None
     input: list[IoDecl] = field(default_factory=list)
     output: list[IoDecl] = field(default_factory=list)
+
+    def __post_init__(self):
+        from .runners_config import RunnerSpec, RunnerKind
+        if self.runner is None:
+            self.runner = RunnerSpec(kind=RunnerKind.subprocess)
 
     def port_encoding(self, port: IoDecl) -> str:
         """The effective encoding for a port: its own override, else the ref default."""
