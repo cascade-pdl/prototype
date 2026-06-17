@@ -20,6 +20,7 @@ metadata. Store keys embed the instance path so lineage is visible on disk.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -128,14 +129,22 @@ class RunState:
 
 
 class Engine:
-    def __init__(self, pipeline: Pipeline, store: Store, runner=None, *, runners=None):
+    def __init__(self, pipeline: Pipeline, store: Store, runner=None, *, runners=None,
+                 max_concurrency: int = 1):
         """``runners`` is a RunnerRegistry (resolves per-ref runner kind). For
         backward compatibility, a single ``runner`` may be passed instead and is
-        used for every node regardless of kind."""
+        used for every node regardless of kind.
+
+        ``max_concurrency`` bounds how many node *instances* run at once (the
+        scatter fan-out). Default 1 = fully sequential (safe for a laptop). Raise
+        it for parallel fan-out (e.g. 100 ECS tasks). Blocking ``runner.run``
+        calls execute in a thread pool so they genuinely overlap; the semaphore
+        caps the number in flight."""
         self.pipeline = pipeline
         self.store = store
         self.runner = runner          # single-runner fallback (tests/demos)
         self.runners = runners        # RunnerRegistry (per-ref dispatch)
+        self.max_concurrency = max_concurrency
 
     def _runner_for(self, ref):
         """Resolve the runner for a ref: the registry by kind, else the single
@@ -145,13 +154,27 @@ class Engine:
         return self.runner
 
     def run(self, plan: ExecutionPlan, inputs: dict[str, str], run_id: str | None = None) -> RunState:
+        """Synchronous entry point — wraps the async engine. Existing callers
+        (CLI, tests) use this unchanged."""
+        return asyncio.run(self.run_async(plan, inputs, run_id))
+
+    async def run_async(self, plan: ExecutionPlan, inputs: dict[str, str],
+                        run_id: str | None = None) -> RunState:
         run_id = run_id or f"run-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         state = RunState(run_id=run_id, inputs=inputs)
+        # bounds concurrent node *instances* across the whole run. Runners are
+        # natively async (they await their waits — docker process, ECS poll
+        # loop), so many instances multiplex on one thread; the semaphore caps
+        # how many are in flight at once.
+        semaphore = asyncio.Semaphore(self.max_concurrency)
 
+        # waves are dependency-ordered → sequential. Nodes within a wave are run
+        # sequentially here too (instance-level concurrency is what scales the
+        # scatter); cross-node concurrency can be added later.
         for wave in plan.waves:
             for node_id in wave:
                 node = plan.nodes[node_id]
-                record = self._run_node(plan, node, state, run_id)
+                record = await self._run_node(plan, node, state, run_id, semaphore)
                 state.nodes[node_id] = record
                 if record.status == "failed":
                     state.status = "failed"
@@ -254,7 +277,8 @@ class Engine:
         return [(_item_id_from_key(k), k) for k in inst.item_keys]
 
     # ------------------------------------------------------------------ #
-    def _run_node(self, plan: ExecutionPlan, node: PlanNode, state: RunState, run_id: str) -> NodeRecord:
+    async def _run_node(self, plan: ExecutionPlan, node: PlanNode, state: RunState,
+                        run_id: str, semaphore: "asyncio.Semaphore") -> NodeRecord:
         ref = self.pipeline.find_ref(node.ref_name)
         if ref is None:
             raise EngineError(f"node '{node.id}' references unknown ref '{node.ref_name}'")
@@ -263,16 +287,26 @@ class Engine:
         instances = self._instance_set(node, state)
         record.scattered = not (len(instances) == 1 and instances[0].depth == 0)
 
-        for ikey in instances:
-            inst = self._run_instance(node, ref, state, run_id, ikey)
-            record.instances.append(inst)
-            if inst.status == "failed":
-                record.status = "failed"
-                return record
-        record.status = "complete"
+        # Instances of one node are independent (none reads another's output —
+        # that independence is exactly what makes scatter parallelizable), so we
+        # run them concurrently, bounded by the semaphore (max_concurrency).
+        async def run_one(ikey: InstanceKey) -> InstanceRecord:
+            async with semaphore:
+                # runners are async; awaiting yields the loop while the instance
+                # waits (container running, ECS task polling), so concurrent
+                # instances genuinely overlap on a single thread
+                return await self._run_instance(node, ref, state, run_id, ikey)
+
+        results = await asyncio.gather(*(run_one(k) for k in instances))
+        # preserve instance order (gather preserves input order)
+        record.instances = list(results)
+        if any(i.status == "failed" for i in record.instances):
+            record.status = "failed"
+        else:
+            record.status = "complete"
         return record
 
-    def _run_instance(self, node: PlanNode, ref, state: RunState, run_id: str,
+    async def _run_instance(self, node: PlanNode, ref, state: RunState, run_id: str,
                       ikey: InstanceKey) -> InstanceRecord:
         inst = InstanceRecord(instance_key=ikey, status="running", started_at=time.time())
 
@@ -297,7 +331,7 @@ class Engine:
                        runner_config=ref.runner.config)
 
         runner = self._runner_for(ref)
-        exit_code = runner.run(spec)
+        exit_code = await runner.run(spec)
         inst.exit_code = exit_code
         inst.completed_at = time.time()
         if exit_code != 0:

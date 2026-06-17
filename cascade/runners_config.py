@@ -122,10 +122,11 @@ class SubprocessDeployment:
 
 @dataclass
 class DeploymentConfig:
-    """Per-environment runner wiring, keyed by runner kind. Supplied at run time
-    (a --runner-config file / env / CLI), never embedded in the pipeline."""
+    """Per-environment runner + store wiring. Supplied at run time (a
+    --runner-config file / env / CLI), never embedded in the pipeline."""
     ecs: EcsDeployment | None = None
     subprocess: SubprocessDeployment | None = None
+    store: Any = None   # a store_config.StoreConf (defaults to a FileStore)
 
     def provides(self, kind: RunnerKind) -> bool:
         """Does this deployment supply what the given runner kind needs?"""
@@ -139,6 +140,7 @@ class DeploymentConfig:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "DeploymentConfig":
+        from .store_config import parse_store_conf
         raw = raw or {}
         runners = raw.get("runners", raw)  # accept {runners: {...}} or {...}
         ecs = None
@@ -160,4 +162,6 @@ class DeploymentConfig:
                 no_pull=s.get("no_pull", True),
                 extra_args=s.get("extra_args") or [],
             )
-        return cls(ecs=ecs, subprocess=sub)
+        # store: section (deployment-level, like runners). Absent -> FileStore.
+        store = parse_store_conf(raw.get("store"))
+        return cls(ecs=ecs, subprocess=sub, store=store)

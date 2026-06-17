@@ -23,6 +23,7 @@ metadata blob to CASCADE_MANIFEST_KEY containing at least:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 from abc import ABC, abstractmethod
@@ -43,8 +44,13 @@ class RunSpec:
 
 class Runner(ABC):
     @abstractmethod
-    def run(self, spec: RunSpec) -> int:
-        """Run the node instance to completion; return its exit code."""
+    async def run(self, spec: RunSpec) -> int:
+        """Run the node instance to completion; return its exit code.
+
+        Async so that runners which spend most of their time *waiting* — an ECS
+        task polled over minutes, a docker container running — yield the event
+        loop while they wait, letting the engine drive many instances
+        concurrently on a single thread (no thread-per-task)."""
 
 
 class SubprocessRunner(Runner):
@@ -69,7 +75,7 @@ class SubprocessRunner(Runner):
         self.no_pull = no_pull
         self.extra_args = extra_args or []
 
-    def run(self, spec: RunSpec) -> int:
+    async def run(self, spec: RunSpec) -> int:
         import os
         cmd = ["docker", "run", "--rm"]
         if self.no_pull:
@@ -87,8 +93,11 @@ class SubprocessRunner(Runner):
             cmd += ["-e", f"{k}={v}"]
         cmd += self.extra_args
         cmd.append(spec.image)
-        proc = subprocess.run(cmd)
-        return proc.returncode
+        # await the container: the docker process runs while the event loop is
+        # free to drive other instances. No thread is held for the duration.
+        proc = await asyncio.create_subprocess_exec(*cmd)
+        await proc.wait()
+        return proc.returncode if proc.returncode is not None else 1
 
 
 class EcsTaskRunner(Runner):
@@ -109,7 +118,7 @@ class EcsTaskRunner(Runner):
         self.deployment = deployment
         self.poll_interval = poll_interval
 
-    def run(self, spec: RunSpec) -> int:  # pragma: no cover - needs real ECS
+    async def run(self, spec: RunSpec) -> int:  # pragma: no cover - needs real ECS
         import boto3  # lazy; only needed when actually running on ECS
         cfg = spec.runner_config  # EcsTaskNodeConfig (cpu/memory/timeout)
         cpu = getattr(cfg, "cpu", None)
@@ -123,26 +132,42 @@ class EcsTaskRunner(Runner):
         if memory:
             container_override["memory"] = memory
 
-        # NB: this assumes a task definition exists that references spec.image,
-        # or you register one per image. Left as the real-ECS wiring point.
-        resp = ecs.run_task(
-            cluster=self.deployment.cluster,
-            launchType="FARGATE",
-            overrides={"containerOverrides": [container_override]},
-            networkConfiguration={
-                "awsvpcConfiguration": {
-                    "subnets": self.deployment.subnets,
-                    "securityGroups": self.deployment.security_groups,
-                    "assignPublicIp": "ENABLED",
-                }
-            } if self.deployment.subnets else {},
-            # taskDefinition=... ,  # supply per your task-def strategy
-        )
-        # poll describe_tasks until STOPPED, read container exit code... (wire up)
-        raise NotImplementedError(
-            "EcsTaskRunner.run: structure is in place; complete the run_task "
-            "task-definition strategy and describe_tasks polling against real ECS"
-        )
+        net = {
+            "awsvpcConfiguration": {
+                "subnets": self.deployment.subnets,
+                "securityGroups": self.deployment.security_groups,
+                "assignPublicIp": "ENABLED",
+            }
+        } if self.deployment.subnets else {}
+
+        # run_task is a short (~100ms) blocking call; wrap it so it doesn't block
+        # the event loop. NB: assumes a task definition referencing spec.image,
+        # or register one per image — the real-ECS wiring point.
+        def _run_task():
+            return ecs.run_task(
+                cluster=self.deployment.cluster,
+                launchType="FARGATE",
+                overrides={"containerOverrides": [container_override]},
+                networkConfiguration=net,
+                # taskDefinition=... ,  # supply per your task-def strategy
+            )
+        resp = await asyncio.to_thread(_run_task)
+        task_arn = resp["tasks"][0]["taskArn"]
+
+        # Poll until the task STOPS. This is the part that takes seconds-to-
+        # minutes — and the reason run() is async: `await asyncio.sleep` yields
+        # the loop between polls, so 100 tasks' poll loops multiplex on one
+        # thread instead of holding 100 threads asleep.
+        while True:
+            await asyncio.sleep(self.poll_interval)
+            desc = await asyncio.to_thread(
+                lambda: ecs.describe_tasks(cluster=self.deployment.cluster, tasks=[task_arn]))
+            task = desc["tasks"][0]
+            if task["lastStatus"] == "STOPPED":
+                containers = task.get("containers", [])
+                exit_code = containers[0].get("exitCode", 1) if containers else 1
+                return int(exit_code)
+        # (timeout handling via cfg.timeout would go here)
 
 
 class EchoRunner(Runner):
@@ -152,7 +177,7 @@ class EchoRunner(Runner):
     def __init__(self, log: list[str] | None = None):
         self.log = log if log is not None else []
 
-    def run(self, spec: RunSpec) -> int:
+    async def run(self, spec: RunSpec) -> int:
         line = (
             f"[echo] would run {spec.image} "
             f"node={spec.node_id} instance={spec.instance_key} "
@@ -203,7 +228,7 @@ class HookedRunner(Runner):
         self.local_dir = Path(local_dir)
         self.local_dir.mkdir(parents=True, exist_ok=True)
 
-    def run(self, spec: RunSpec) -> int:
+    async def run(self, spec: RunSpec) -> int:
         import json as _json
         from pathlib import Path
         from . import hooks
@@ -246,7 +271,7 @@ class HookedRunner(Runner):
             run_id=spec.run_id, node_id=spec.node_id, instance_key=spec.instance_key,
             image=spec.image, env=inner_env,
         )
-        code = self.inner.run(inner_spec)
+        code = await self.inner.run(inner_spec)
         if code != 0:
             return code
 

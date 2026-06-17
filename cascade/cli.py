@@ -111,7 +111,8 @@ def cmd_run(args) -> int:
 
     registry = RunnerRegistry(deployment, store_root=args.store,
                               subprocess_extra_args=extra_args)
-    engine = Engine(pipeline, store, runners=registry)
+    engine = Engine(pipeline, store, runners=registry,
+                    max_concurrency=args.max_concurrency)
     state = engine.run(plan, inputs, run_id=args.run_id)
     print(f"\nrun {state.run_id}: {state.status}")
     print(f"run state: runs/{state.run_id}/_run_state.json (in {args.store})")
@@ -172,6 +173,9 @@ def main(argv=None) -> int:
     p_run.add_argument("--runner-config", default=None,
                        help="deployment config YAML (ECS cluster, etc.) — per-environment, "
                             "kept out of the pipeline")
+    p_run.add_argument("--max-concurrency", type=int, default=1,
+                       help="max node instances to run at once (scatter fan-out). "
+                            "Default 1 = sequential; raise for parallel runs (e.g. ECS).")
     p_run.add_argument("--dry-run", action="store_true", help="use the echo runner, launch nothing")
     p_run.set_defaults(func=cmd_run)
 

@@ -6,7 +6,7 @@ over string keys — with swappable backends. The runner and engine move only
 
 Two backends:
   - :class:`FileStore`  — a local directory. The whole local mode.
-  - :class:`S3Store`     — points at an S3 bucket/prefix (stub; fill in boto3).
+  - :class:`S3Store`     — points at an S3 bucket/prefix (sync boto3).
 
 Keys are run-scoped paths like ``runs/<run_id>/<node_id>/<instance>/output.json``.
 (Content-addressing — keying by content hash for dedup — is an optimisation
@@ -61,27 +61,72 @@ class FileStore(Store):
     def has(self, key: str) -> bool:
         return (self.root / key).exists()
 
+    def list(self, prefix: str = "") -> list[str]:
+        """List keys under a prefix (store-relative)."""
+        base = self.root / prefix
+        if not base.exists():
+            return []
+        out = []
+        for p in base.rglob("*"):
+            if p.is_file():
+                out.append(str(p.relative_to(self.root)))
+        return out
+
 
 class S3Store(Store):
-    """An S3-backed store. Stubbed — fill in with boto3 for distributed runs.
+    """An S3-backed store. Sync boto3 — fine because the engine only does small
+    control-plane reads/writes here (run-state, manifests); the *bulk* payloads
+    move container<->S3 directly via the node-side fetch/stage utilities, never
+    through the engine.
 
     The interface is identical to :class:`FileStore`, which is the point: the
     engine and runner don't care which backend they talk to.
     """
 
-    def __init__(self, bucket: str, prefix: str = ""):
+    def __init__(self, bucket: str, prefix: str = "", region: str | None = None):
+        if not bucket:
+            raise ValueError("S3Store requires a bucket")
         self.bucket = bucket
         self.prefix = prefix.rstrip("/")
+        self.region = region
+        self._client = None  # lazy: only build the boto3 client when first used
+
+    @property
+    def client(self):
+        if self._client is None:
+            import boto3
+            self._client = boto3.client("s3", region_name=self.region)
+        return self._client
 
     def _key(self, key: str) -> str:
         return f"{self.prefix}/{key}" if self.prefix else key
 
-    def put(self, key: str, data: bytes) -> str:  # pragma: no cover - stub
-        # import boto3; boto3.client("s3").put_object(Bucket=..., Key=..., Body=data)
-        raise NotImplementedError("S3Store.put: wire up boto3 for distributed runs")
+    def put(self, key: str, data: bytes) -> str:
+        self.client.put_object(Bucket=self.bucket, Key=self._key(key), Body=data)
+        return key
 
-    def get(self, key: str) -> bytes:  # pragma: no cover - stub
-        raise NotImplementedError("S3Store.get: wire up boto3 for distributed runs")
+    def get(self, key: str) -> bytes:
+        resp = self.client.get_object(Bucket=self.bucket, Key=self._key(key))
+        return resp["Body"].read()
 
-    def has(self, key: str) -> bool:  # pragma: no cover - stub
-        raise NotImplementedError("S3Store.has: wire up boto3 for distributed runs")
+    def has(self, key: str) -> bool:
+        from botocore.exceptions import ClientError
+        try:
+            self.client.head_object(Bucket=self.bucket, Key=self._key(key))
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise
+
+    def list(self, prefix: str = "") -> list[str]:
+        """List keys under a prefix (store-relative, prefix stripped back off)."""
+        full = self._key(prefix)
+        paginator = self.client.get_paginator("list_objects_v2")
+        out = []
+        strip = (self.prefix + "/") if self.prefix else ""
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=full):
+            for obj in page.get("Contents", []):
+                k = obj["Key"]
+                out.append(k[len(strip):] if strip and k.startswith(strip) else k)
+        return out
