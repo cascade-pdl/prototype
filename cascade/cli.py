@@ -75,7 +75,22 @@ def cmd_run(args) -> int:
         name, key = item.split("=", 1)
         inputs[name] = key
 
-    runner = EchoRunner() if args.dry_run else SubprocessRunner(store_mount=args.store_mount)
+    # assemble extra docker arguments from --docker-arg (raw) and --docker-env
+    extra_args = []
+    for env_item in args.docker_env or []:
+        if "=" not in env_item:
+            print(f"--docker-env must be NAME=VALUE, got '{env_item}'")
+            return 1
+        extra_args += ["-e", env_item]
+    for raw in args.docker_arg or []:
+        # split on whitespace so a single --docker-arg "-v a:b" becomes two tokens
+        extra_args += raw.split()
+
+    runner = EchoRunner() if args.dry_run else SubprocessRunner(
+        store_root=args.store,
+        store_mount=args.store_mount,  # optional explicit override
+        extra_args=extra_args,
+    )
     engine = Engine(pipeline, store, runner)
     state = engine.run(plan, inputs, run_id=args.run_id)
     print(f"\nrun {state.run_id}: {state.status}")
@@ -127,6 +142,12 @@ def main(argv=None) -> int:
     p_run.add_argument("--store-mount", default=None,
                        help="host:container bind mount for the store (subprocess runner)")
     p_run.add_argument("--input", action="append", help="pipeline input as name=storekey")
+    p_run.add_argument("--docker-arg", action="append",
+                       help="extra raw arg(s) passed to 'docker run', repeatable. "
+                            "e.g. --docker-arg '-v /home/me/.aws:/root/.aws:ro'")
+    p_run.add_argument("--docker-env", action="append",
+                       help="env var passed into the container as NAME=VALUE, repeatable. "
+                            "e.g. --docker-env AWS_PROFILE=wilder-sensing-develop")
     p_run.add_argument("--run-id", default=None)
     p_run.add_argument("--dry-run", action="store_true", help="use the echo runner, launch nothing")
     p_run.set_defaults(func=cmd_run)

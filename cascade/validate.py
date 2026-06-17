@@ -66,8 +66,6 @@ def validate_dags(pipeline: Pipeline) -> ValidationReport:
                          f"references unknown ref '{node.ref_name}'")
             continue
 
-        downstream_scatters = node.scatter is not None
-
         for edge in node.depends_on:
             loc = f"node '{node_id}' <- '{edge.node}'"
 
@@ -107,7 +105,15 @@ def validate_dags(pipeline: Pipeline) -> ValidationReport:
                 )
                 continue
 
-            transform = transform_for(edge.mode, downstream_scatters)
+            # The scatter transform applies ONLY to the edge whose field is this
+            # node's scatter axis — not to every edge of a scattering node. Other
+            # edges (a root $input, a carried dependency) pass through unscattered.
+            edge_is_scatter_axis = (
+                node.scatter is not None
+                and not edge.is_input
+                and edge.field == node.scatter
+            )
+            transform = transform_for(edge.mode, edge_is_scatter_axis)
             try:
                 warnings = check_edge(registry, upstream_type, transform, down_in.type)
                 for w in warnings:

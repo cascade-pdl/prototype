@@ -1,0 +1,19 @@
+.expand/*
+tmp/*
+
+# python
+dist/*
+report.xml
+**/__pycache__
+*.egg-info/
+.pytest_cache/
+
+# emacs
+*~
+
+# env
+env.default
+
+# cascade artifacts
+_cascade_store/
+_store/

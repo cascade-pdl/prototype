@@ -47,21 +47,40 @@ class Runner(ABC):
 class SubprocessRunner(Runner):
     """Runs the node as a local Docker container via ``docker run``.
 
-    The store must be reachable from inside the container. For a local
-    :class:`~cascade.store.FileStore`, that means bind-mounting the store root
-    into the container at a known path and pointing the entrypoint at it.
+    The store must be reachable from inside the container. Pass ``store_root``
+    (the FileStore's host directory) and the runner bind-mounts it at
+    ``container_store`` (default ``/store``) and sets ``CASCADE_STORE_ROOT`` so
+    the container resolves the engine's relative store keys against the mount.
+
+    ``no_pull`` adds ``--pull=never`` so a locally-built image with a ``:dev``
+    (or ``:latest``) tag isn't chased to a registry.
     """
 
-    def __init__(self, store_mount: str | None = None, extra_args: list[str] | None = None):
-        # store_mount: "host_path:container_path" for a FileStore-backed local run
+    def __init__(self, store_root: str | None = None, container_store: str = "/store",
+                 store_mount: str | None = None, no_pull: bool = True,
+                 extra_args: list[str] | None = None):
+        self.store_root = store_root
+        self.container_store = container_store
+        # explicit store_mount overrides the derived one (advanced/override use)
         self.store_mount = store_mount
+        self.no_pull = no_pull
         self.extra_args = extra_args or []
 
     def run(self, spec: RunSpec) -> int:
+        import os
         cmd = ["docker", "run", "--rm"]
-        if self.store_mount:
-            cmd += ["-v", self.store_mount]
-        for k, v in spec.env.items():
+        if self.no_pull:
+            cmd += ["--pull", "never"]
+        mount = self.store_mount
+        if mount is None and self.store_root is not None:
+            host = os.path.abspath(self.store_root)
+            mount = f"{host}:{self.container_store}"
+        if mount:
+            cmd += ["-v", mount]
+        env = dict(spec.env)
+        if self.store_root is not None and "CASCADE_STORE_ROOT" not in env:
+            env["CASCADE_STORE_ROOT"] = self.container_store
+        for k, v in env.items():
             cmd += ["-e", f"{k}={v}"]
         cmd += self.extra_args
         cmd.append(spec.image)
