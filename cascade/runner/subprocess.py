@@ -58,6 +58,22 @@ class SubprocessRunner(Runner):
         self.aws_credentials_container = aws_credentials_container
         self.home = home
 
+    def _rig_store_conf(self, blob: str) -> str:
+        """Rewrite a local FileStore's root to the container's mount point, so
+        the container builds an equivalent store against the bind mount. S3 (and
+        any non-file) confs pass through unchanged. Store keys are root-relative,
+        so only the root differs between engine (host path) and container (mount)."""
+        from ..store_config import StoreConf, StoreKind, FileStoreConfig
+        try:
+            conf = StoreConf.from_json(blob)
+        except Exception:
+            return blob
+        if conf.kind == StoreKind.file:
+            conf = StoreConf(kind=StoreKind.file,
+                             config=FileStoreConfig(root=self.container_store))
+            return conf.to_json()
+        return blob
+
     def _build_cmd(self, spec: RunSpec) -> list[str]:
         import os
         cmd = ["docker", "run", "--rm"]
@@ -70,8 +86,13 @@ class SubprocessRunner(Runner):
         if mount:
             cmd += ["-v", mount]
         env = dict(spec.env)
-        if self.store_root is not None and "CASCADE_STORE_ROOT" not in env:
-            env["CASCADE_STORE_ROOT"] = self.container_store
+        # Rig the store conf for the container: if it's a local FileStore, its
+        # root is a HOST path meaningless inside the container — rewrite it to
+        # the bind-mount point (which we own). The container then builds a
+        # FileStore at the mount and uses the SAME store API as any other store
+        # — no CASCADE_STORE_ROOT special case. S3 confs pass through untouched.
+        if "CASCADE_STORE_CONF" in env:
+            env["CASCADE_STORE_CONF"] = self._rig_store_conf(env["CASCADE_STORE_CONF"])
         mapped_user = False
         if self.map_current_user and hasattr(os, "getuid"):
             cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]

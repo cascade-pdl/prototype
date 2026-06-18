@@ -448,15 +448,16 @@ class Engine:
             "CASCADE_ARGS": json.dumps(node.args),
             "CASCADE_PORTS": json.dumps(ports),
         }
-        # pass the store config down so the container's fetch/stage utilities
-        # build the same store the engine uses — but ONLY for location-
-        # independent stores (S3). A local FileStore's host path is meaningless
-        # inside the container, which instead resolves keys against the bind
-        # mount via CASCADE_STORE_ROOT (set by the SubprocessRunner).
+        # pass the store config down so the container builds the SAME store the
+        # engine uses — uniformly, for every store kind. For S3 the conf is
+        # location-independent and passes through verbatim. For a local
+        # FileStore the SubprocessRunner rewrites the root to the container's
+        # bind-mount path (it owns the mount, so it owns the host->container
+        # translation) — so the container always receives one CASCADE_STORE_CONF
+        # and builds one store the same way, with no CASCADE_STORE_ROOT special
+        # case. The store conf travels on the spec; the runner adjusts it.
         if self.store_conf is not None:
-            from .store_config import StoreKind
-            if self.store_conf.kind != StoreKind.file:
-                env["CASCADE_STORE_CONF"] = self.store_conf.to_json()
+            env["CASCADE_STORE_CONF"] = self.store_conf.to_json()
         spec = RunSpec(run_id=run_id, node_id=node.id, instance_key=ikey.render(),
                        image=ref.image, env=env,
                        runner_config=ref.runner.config, ref_name=ref.name)

@@ -30,16 +30,16 @@ from pathlib import Path
 
 
 def _store_from_env():
-    """Build the Store from CASCADE_STORE_CONF (the blob the engine passed down).
-    Falls back to a FileStore at CASCADE_STORE_ROOT for the local bind-mount
-    case where no explicit conf was provided."""
-    from .store_config import StoreConf, build_store, StoreKind, FileStoreConfig
+    """Build the Store from CASCADE_STORE_CONF — the blob the engine passes down
+    for every store kind (the subprocess runner rigs a local FileStore's root to
+    the container mount, so this is uniform regardless of store or runner)."""
+    from .store_config import StoreConf, build_store
     blob = os.environ.get("CASCADE_STORE_CONF")
-    if blob:
-        return build_store(StoreConf.from_json(blob))
-    # local fallback: a FileStore rooted at the bind mount
-    root = os.environ.get("CASCADE_STORE_ROOT", "/store")
-    return build_store(StoreConf(kind=StoreKind.file, config=FileStoreConfig(root=root)))
+    if not blob:
+        raise RuntimeError(
+            "CASCADE_STORE_CONF is not set — the engine passes it for every run; "
+            "if you're invoking this utility by hand, set it to the store config JSON")
+    return build_store(StoreConf.from_json(blob))
 
 
 # --------------------------------------------------------------------------- #

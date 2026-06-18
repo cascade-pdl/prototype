@@ -31,7 +31,6 @@ def _load_deployment(path: str) -> DeploymentConfig:
         sys.stderr.write("provisioning commands require a deployment file\n")
         raise SystemExit(2)
     import yaml
-
     return DeploymentConfig.from_dict(yaml.safe_load(p.read_text()))
 
 
@@ -83,7 +82,7 @@ def cmd_authoring_list_refs(args) -> int:
         if getattr(args, "show_remotes", False) and not _is_remote_image(ref.image):
             continue
         if not show_fields:
-            print(ref.name)  # bare list (keeps the loop-driver contract)
+            print(ref.name)            # bare list (keeps the loop-driver contract)
             continue
         # small YAML block: ref name -> requested fields
         print(f"{ref.name}:")
@@ -97,9 +96,7 @@ def cmd_authoring_list_refs(args) -> int:
             elif f == "remote":
                 print(f"  remote: {str(_is_remote_image(ref.image)).lower()}")
             else:
-                sys.stderr.write(
-                    f"unknown field '{f}' (image, runner, encoding, remote)\n"
-                )
+                sys.stderr.write(f"unknown field '{f}' (image, runner, encoding, remote)\n")
                 return 2
     return 0
 
@@ -119,11 +116,8 @@ def cmd_authoring_suggest_image_name(args) -> int:
         deployment = _load_deployment(args.deployment_file)
     except SystemExit:
         deployment = None
-    reg = (
-        deployment.ecs.registry_url
-        if (deployment and deployment.ecs and deployment.ecs.registry_url)
-        else None
-    )
+    reg = (deployment.ecs.registry_url
+           if (deployment and deployment.ecs and deployment.ecs.registry_url) else None)
     if reg:
         print(naming.image_uri(reg, project.name, ref.name, tag))
     else:
@@ -134,15 +128,10 @@ def cmd_authoring_suggest_image_name(args) -> int:
 def _suggest_tag(project) -> str:
     """Suggest an image tag: short git commit if in a repo, else project version."""
     import subprocess
-
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(project.root),
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
+            cwd=str(project.root), capture_output=True, text=True, timeout=3)
         if out.returncode == 0 and out.stdout.strip():
             return out.stdout.strip()
     except Exception:
@@ -260,8 +249,7 @@ def cmd_authoring_new(args) -> int:
         if not args.yes:
             sys.stderr.write(
                 f"Create a new cascade project '{project_name}' in the current "
-                f"directory? [y/N] "
-            )
+                f"directory? [y/N] ")
             sys.stderr.flush()
             resp = sys.stdin.readline().strip().lower()
             if resp not in ("y", "yes"):
@@ -281,27 +269,23 @@ def cmd_authoring_new(args) -> int:
     # STRICT: refuse a non-empty target, no matter what
     if target.exists() and any(target.iterdir()):
         sys.stderr.write(
-            f"refusing to scaffold into '{target}': directory is not empty\n"
-        )
+            f"refusing to scaffold into '{target}': directory is not empty\n")
         return 2
     target.mkdir(parents=True, exist_ok=True)
 
     (target / "cascade.toml").write_text(
-        f"[cascade-project]\n"
+        f'[cascade-project]\n'
         f'name = "{project_name}"\n'
         f'version = "0.0.1"\n'
-        f"maintainers = []\n"
+        f'maintainers = []\n'
         f'description = "{project_name}"\n'
         f'pipeline_file = "pipeline.yaml"\n'
     )
-    (target / "pipeline.yaml").write_text(
-        _SCAFFOLD_PIPELINE.format(project=project_name)
-    )
+    (target / "pipeline.yaml").write_text(_SCAFFOLD_PIPELINE.format(project=project_name))
     (target / "deployment.yaml").write_text(_SCAFFOLD_DEPLOYMENT)
     (target / ".gitignore").write_text(_SCAFFOLD_GITIGNORE)
     (target / "README.md").write_text(
-        _SCAFFOLD_README.format(name=project_name, description=project_name)
-    )
+        _SCAFFOLD_README.format(name=project_name, description=project_name))
     refdir = target / "refs" / "greet"
     refdir.mkdir(parents=True)
     (refdir / "Dockerfile").write_text(_SCAFFOLD_DOCKERFILE)
@@ -325,16 +309,15 @@ def cmd_prov_docker_build_args(args) -> int:
     return 0
 
 
-def cmd_prov_docker_push_args(args) -> int:
+def cmd_prov_docker_push_commands(args) -> int:
     project, pipeline = _project_and_pipeline(args)
     ref = _find_ref(pipeline, args.ref_name)
     if not _is_remote_image(ref.image):
         sys.stderr.write(
             f"ref '{ref.name}' image '{ref.image}' is not a remote reference; "
-            f"nothing to push\n"
-        )
+            f"nothing to push\n")
         return 2
-    print(f"{ref.image}")
+    print(f"docker push {ref.image}")
     return 0
 
 
@@ -377,22 +360,19 @@ def cmd_prov_ecs_gen_taskdef(args) -> int:
         "networkMode": "awsvpc",
         "cpu": str(cpu or 256),
         "memory": str(memory or 512),
-        "containerDefinitions": [
-            {
-                "name": naming.container_name(ref.name),
-                "image": image,
-                "essential": True,
-                "logConfiguration": {
-                    "logDriver": "awslogs",
-                    "options": {
-                        "awslogs-group": ecs.log_group
-                        or naming.log_group(project.name),
-                        "awslogs-region": region,
-                        "awslogs-stream-prefix": ref.name,
-                    },
+        "containerDefinitions": [{
+            "name": naming.container_name(ref.name),
+            "image": image,
+            "essential": True,
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": ecs.log_group or naming.log_group(project.name),
+                    "awslogs-region": region,
+                    "awslogs-stream-prefix": ref.name,
                 },
-            }
-        ],
+            },
+        }],
     }
     if ecs.execution_role:
         taskdef["executionRoleArn"] = ecs.execution_role
@@ -410,66 +390,38 @@ def add_authoring_subcommands(sub):
     asub = a.add_subparsers(dest="authoring_cmd", required=True)
 
     lr = asub.add_parser("list-refs", help="list pipeline refs (optionally by runner)")
-    lr.add_argument(
-        "--runner", default=None, help="filter by runner kind (e.g. ecs-task)"
-    )
-    lr.add_argument(
-        "--show-remotes",
-        action="store_true",
-        help="only refs whose image is a remote reference (needs push)",
-    )
-    lr.add_argument(
-        "--show-fields",
-        default=None,
-        help="comma-separated fields to show as YAML (image,runner,encoding,remote)",
-    )
+    lr.add_argument("--runner", default=None, help="filter by runner kind (e.g. ecs-task)")
+    lr.add_argument("--show-remotes", action="store_true",
+                    help="only refs whose image is a remote reference (needs push)")
+    lr.add_argument("--show-fields", default=None,
+                    help="comma-separated fields to show as YAML (image,runner,encoding,remote)")
     lr.add_argument("--project-file", default="cascade.toml")
     lr.set_defaults(func=cmd_authoring_list_refs)
 
-    si = asub.add_parser(
-        "suggest-image-name",
-        help="suggest an image name for a ref (advisory; ignores ref.image)",
-    )
+    si = asub.add_parser("suggest-image-name",
+                         help="suggest an image name for a ref (advisory; ignores ref.image)")
     si.add_argument("--ref-name", required=True)
-    si.add_argument(
-        "--tag",
-        default=None,
-        help="override the suggested tag (default: git short sha or project version)",
-    )
+    si.add_argument("--tag", default=None, help="override the suggested tag (default: git short sha or project version)")
     si.add_argument("--project-file", default="cascade.toml")
     si.add_argument("--deployment-file", default="deployment.yaml")
     si.set_defaults(func=cmd_authoring_suggest_image_name)
 
     nw = asub.add_parser("new", help="scaffold a new cascade project")
-    nw.add_argument(
-        "name", help="project name (new folder), or '.' for the current dir"
-    )
-    nw.add_argument(
-        "--yes", "-y", action="store_true", help="skip confirmation for '.'"
-    )
+    nw.add_argument("name", help="project name (new folder), or '.' for the current dir")
+    nw.add_argument("--yes", "-y", action="store_true", help="skip confirmation for '.'")
     nw.set_defaults(func=cmd_authoring_new)
 
 
 def add_provisioning_subcommands(sub):
-    p = sub.add_parser(
-        "provisioning", help="generate infra artifacts (docker, ecs-task)"
-    )
+    p = sub.add_parser("provisioning", help="generate infra artifacts (docker, ecs-task)")
     psub = p.add_subparsers(dest="prov_target", required=True)
 
     # docker — build/push honour the ref's declared image verbatim
     d = psub.add_parser("docker", help="docker build/push artifacts")
     dsub = d.add_subparsers(dest="docker_cmd", required=True)
     for cmd, fn, helptext in [
-        (
-            "build-args",
-            cmd_prov_docker_build_args,
-            "args for `docker build $(...)` (uses ref.image)",
-        ),
-        (
-            "push-args",
-            cmd_prov_docker_push_args,
-            "args for `docker push $(...)` (for a remote-image ref)",
-        ),
+        ("build-args", cmd_prov_docker_build_args, "args for `docker build $(...)` (uses ref.image)"),
+        ("push-commands", cmd_prov_docker_push_commands, "push command for a remote-image ref"),
     ]:
         c = dsub.add_parser(cmd, help=helptext)
         c.add_argument("--ref-name", required=True)
@@ -489,9 +441,7 @@ def add_provisioning_subcommands(sub):
     gr.add_argument("--project-file", default="cascade.toml")
     gr.set_defaults(func=cmd_prov_ecs_gen_repository)
 
-    gt = esub.add_parser(
-        "gen-taskdef", help="generate a task definition JSON (uses ref.image)"
-    )
+    gt = esub.add_parser("gen-taskdef", help="generate a task definition JSON (uses ref.image)")
     gt.add_argument("--ref-name", required=True)
     gt.add_argument("--project-file", default="cascade.toml")
     gt.add_argument("--deployment-file", default="deployment.yaml")
