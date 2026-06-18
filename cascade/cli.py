@@ -109,10 +109,23 @@ def cmd_run(args) -> int:
             print(f"  - {p}")
         return 1
 
+    # the project name (from cascade.toml, if present) lets the ECS runner derive
+    # the conventional taskdef family — matching what provisioning created
+    project_name = None
+    try:
+        from .project import ProjectConfig
+        import os
+        if os.path.exists("cascade.toml"):
+            project_name = ProjectConfig.load("cascade.toml").name
+    except Exception:
+        project_name = None
+
     registry = RunnerRegistry(deployment, store_root=args.store,
-                              subprocess_extra_args=extra_args)
+                              subprocess_extra_args=extra_args,
+                              project_name=project_name)
     engine = Engine(pipeline, store, runners=registry,
-                    max_concurrency=args.max_concurrency)
+                    max_concurrency=args.max_concurrency,
+                    store_conf=deployment.store)
     state = engine.run(plan, inputs, run_id=args.run_id)
     print(f"\nrun {state.run_id}: {state.status}")
     print(f"run state: runs/{state.run_id}/_run_state.json (in {args.store})")
@@ -156,6 +169,15 @@ def main(argv=None) -> int:
     p_graph = sub.add_parser("graph", help="print execution waves")
     p_graph.add_argument("pipeline")
     p_graph.set_defaults(func=cmd_graph)
+
+    # node-side utilities (run inside the container by the entrypoint)
+    from .node_cli import add_node_subcommands
+    add_node_subcommands(sub)
+
+    # authoring + provisioning command groups
+    from .provisioning import add_authoring_subcommands, add_provisioning_subcommands
+    add_authoring_subcommands(sub)
+    add_provisioning_subcommands(sub)
 
     p_run = sub.add_parser("run", help="run a pipeline")
     p_run.add_argument("pipeline")

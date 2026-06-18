@@ -165,10 +165,20 @@ class DagNode:
 
 @dataclass
 class NamedDag:
-    """A reusable subdag (the ``dags:`` section). Its internal ``$input``
-    references are scoped to whatever the parent wires in."""
+    """A reusable subdag (the ``dags:`` section).
+
+    A subdag is an encapsulated unit: it declares ``inputs`` (its own scope — its
+    internal ``$input`` resolves to these, wired by the parent at the call site)
+    and ``outputs`` (named bindings to internal nodes, each collapsed to the
+    subdag's root so the boundary is cardinality-one — internal scatter does not
+    leak out). The parent treats the subdag like a single node.
+    """
     name: str
     nodes: dict[str, DagNode] = field(default_factory=dict)
+    inputs: list[str] = field(default_factory=list)
+    # outputs: list of {name, from_node} — subdag output `name` is internal
+    # node `from_node`'s output (collapsed to the subdag root)
+    outputs: list[dict] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #

@@ -31,6 +31,17 @@ class RunnerKind(str, Enum):
     ecs_task = "ecs-task"
     echo = "echo"            # no-op, for dry runs / tests
 
+    @property
+    def shares_engine_filesystem(self) -> bool:
+        """Whether a node run by this kind can reach the engine's local
+        filesystem. A local FileStore only works when this is True (the
+        container bind-mounts the host dir). ECS tasks have no host filesystem
+        access, so a local FileStore is unreachable for them — they need S3 (or,
+        not yet modelled, a shared EFS mount).
+
+        echo runs in-process (tests/dry-run), so it trivially shares."""
+        return self in (RunnerKind.subprocess, RunnerKind.echo)
+
 
 # --------------------------------------------------------------------------- #
 # Per-node config (on the ref, in the pipeline) — discriminated by kind.
@@ -107,6 +118,8 @@ class EcsDeployment:
     cluster: str
     region: str | None = None
     task_role: str | None = None
+    execution_role: str | None = None     # ECS infra role: pull image, write logs
+    registry_url: str | None = None        # ECR registry base (ACCOUNT.dkr.ecr.REGION...)
     subnets: list[str] = field(default_factory=list)
     security_groups: list[str] = field(default_factory=list)
     log_group: str | None = None
@@ -114,10 +127,19 @@ class EcsDeployment:
 
 @dataclass
 class SubprocessDeployment:
-    # local docker: optional extra args, container store mount point
+    """Local docker invocation config. Captures the coupled local-docker
+    concerns so you don't pass them as raw docker args each time."""
     container_store: str = "/store"
     no_pull: bool = True
     extra_args: list[str] = field(default_factory=list)
+    # run the container as the current user (so store files aren't root-owned).
+    # default True — this is almost always what you want locally.
+    map_current_user: bool = True
+    # AWS creds: point at your host ~/.aws; the runner mounts it read-only and
+    # sets HOME so boto3 finds it. None = don't mount creds.
+    aws_credentials_host: str | None = None
+    aws_credentials_container: str = "/tmp/.aws"
+    home: str | None = None
 
 
 @dataclass
@@ -150,6 +172,8 @@ class DeploymentConfig:
                 cluster=e["cluster"],
                 region=e.get("region"),
                 task_role=e.get("task_role") or e.get("aws_role"),
+                execution_role=e.get("execution_role"),
+                registry_url=e.get("registry_url"),
                 subnets=e.get("subnets") or [],
                 security_groups=e.get("security_groups") or [],
                 log_group=e.get("log_group"),
@@ -157,10 +181,15 @@ class DeploymentConfig:
         sub = None
         if runners.get("subprocess"):
             s = runners["subprocess"]
+            aws = s.get("aws_credentials") or {}
             sub = SubprocessDeployment(
                 container_store=s.get("container_store", "/store"),
                 no_pull=s.get("no_pull", True),
                 extra_args=s.get("extra_args") or [],
+                map_current_user=s.get("map_current_user", True),
+                aws_credentials_host=(aws.get("host_path") if isinstance(aws, dict) else aws) or None,
+                aws_credentials_container=(aws.get("container_path") if isinstance(aws, dict) else None) or "/tmp/.aws",
+                home=s.get("home"),
             )
         # store: section (deployment-level, like runners). Absent -> FileStore.
         store = parse_store_conf(raw.get("store"))

@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, asdict
 
 from .hkey import InstanceKey
 from .model import Pipeline
-from .plan import ExecutionPlan, PlanNode
+from .plan import ExecutionPlan, PlanNode, build_plan
 from .runner import Runner, RunSpec
 from .store import Store
 
@@ -130,25 +130,33 @@ class RunState:
 
 class Engine:
     def __init__(self, pipeline: Pipeline, store: Store, runner=None, *, runners=None,
-                 max_concurrency: int = 1):
+                 max_concurrency: int = 1, store_conf=None):
         """``runners`` is a RunnerRegistry (resolves per-ref runner kind). For
         backward compatibility, a single ``runner`` may be passed instead and is
         used for every node regardless of kind.
 
         ``max_concurrency`` bounds how many node *instances* run at once (the
         scatter fan-out). Default 1 = fully sequential (safe for a laptop). Raise
-        it for parallel fan-out (e.g. 100 ECS tasks). Blocking ``runner.run``
-        calls execute in a thread pool so they genuinely overlap; the semaphore
-        caps the number in flight."""
+        it for parallel fan-out (e.g. 100 ECS tasks). Runners are natively async,
+        so instances multiplex on one thread; the semaphore caps in-flight count.
+
+        ``store_conf`` (a store_config.StoreConf) is serialized into each
+        container's ``CASCADE_STORE_CONF`` so the container's fetch/stage
+        utilities build the *same* store the engine uses."""
         self.pipeline = pipeline
         self.store = store
         self.runner = runner          # single-runner fallback (tests/demos)
         self.runners = runners        # RunnerRegistry (per-ref dispatch)
         self.max_concurrency = max_concurrency
+        self.store_conf = store_conf  # StoreConf passed down to containers
 
-    def _runner_for(self, ref):
-        """Resolve the runner for a ref: the registry by kind, else the single
+    def _runner_for(self, ref, node=None):
+        """Resolve the runner for a node/ref. Builtin nodes use the in-process
+        BuiltinRunner; otherwise the registry by ref runner kind, else the single
         fallback runner."""
+        if node is not None and getattr(node, "kind", "ref") == "builtin":
+            from .runner import BuiltinRunner
+            return BuiltinRunner(self.store)
         if self.runners is not None:
             return self.runners.get(ref.runner.kind)
         return self.runner
@@ -279,7 +287,16 @@ class Engine:
     # ------------------------------------------------------------------ #
     async def _run_node(self, plan: ExecutionPlan, node: PlanNode, state: RunState,
                         run_id: str, semaphore: "asyncio.Semaphore") -> NodeRecord:
+        kind = getattr(node, "kind", "ref")
+        if kind == "dag":
+            return await self._run_subdag_node(plan, node, state, run_id, semaphore)
+
         ref = self.pipeline.find_ref(node.ref_name)
+        if ref is None and kind == "builtin":
+            # builtin nodes have no ref; synthesize a minimal one carrying the
+            # builtin image id (builtin:<name>) and a subprocess runner spec
+            # placeholder (the engine routes builtins to the BuiltinRunner).
+            ref = self._builtin_ref(node)
         if ref is None:
             raise EngineError(f"node '{node.id}' references unknown ref '{node.ref_name}'")
 
@@ -287,24 +304,129 @@ class Engine:
         instances = self._instance_set(node, state)
         record.scattered = not (len(instances) == 1 and instances[0].depth == 0)
 
-        # Instances of one node are independent (none reads another's output —
-        # that independence is exactly what makes scatter parallelizable), so we
-        # run them concurrently, bounded by the semaphore (max_concurrency).
         async def run_one(ikey: InstanceKey) -> InstanceRecord:
             async with semaphore:
-                # runners are async; awaiting yields the loop while the instance
-                # waits (container running, ECS task polling), so concurrent
-                # instances genuinely overlap on a single thread
                 return await self._run_instance(node, ref, state, run_id, ikey)
 
         results = await asyncio.gather(*(run_one(k) for k in instances))
-        # preserve instance order (gather preserves input order)
         record.instances = list(results)
         if any(i.status == "failed" for i in record.instances):
             record.status = "failed"
         else:
             record.status = "complete"
         return record
+
+    def _builtin_ref(self, node: PlanNode):
+        """Synthesize a Ref for a builtin node (image = builtin:<name>)."""
+        from .model import Ref, IoDecl
+        return Ref(name=node.id, image=node.ref_name)
+
+    async def _run_subdag_node(self, plan: ExecutionPlan, node: PlanNode,
+                               state: RunState, run_id: str,
+                               semaphore: "asyncio.Semaphore") -> NodeRecord:
+        """In-process dag runner: a subdag node runs its body in its own scope,
+        once per instance of the node, under a child instance key. The subdag's
+        $input is wired from the node's depends_on (lexical scoping — the subdag
+        sees only what the parent passes). Its declared outputs are bound to
+        internal nodes and surfaced at the subdag node's instance location, so
+        the parent consumes the subdag exactly like a leaf node.
+        """
+        subdag = self.pipeline.find_dag(node.ref_name)
+        if subdag is None:
+            raise EngineError(f"subdag node '{node.id}' references unknown dag '{node.ref_name}'")
+
+        record = NodeRecord(node_id=node.id, ref_name=node.ref_name, status="running")
+        instances = self._instance_set(node, state)
+        record.scattered = not (len(instances) == 1 and instances[0].depth == 0)
+
+        async def run_one(ikey: InstanceKey) -> InstanceRecord:
+            async with semaphore:
+                return await self._run_subdag_instance(node, subdag, state, run_id, ikey)
+
+        results = await asyncio.gather(*(run_one(k) for k in instances))
+        record.instances = list(results)
+        record.status = "failed" if any(i.status == "failed" for i in record.instances) else "complete"
+        return record
+
+    async def _run_subdag_instance(self, node: PlanNode, subdag, state: RunState,
+                                   run_id: str, ikey: InstanceKey) -> InstanceRecord:
+        inst = InstanceRecord(instance_key=ikey, status="running", started_at=time.time())
+
+        # wire the parent's inputs into the subdag's $input scope: each of the
+        # node's depends_on resolves to a store key, bound by its `as`/field name
+        parent_inputs = self._resolve_input_keys(node, state, ikey)
+
+        # build a sub-pipeline whose dag IS the subdag body, whose $input is the
+        # wired parent inputs, sharing refs/types with the parent pipeline
+        from .model import Pipeline
+        sub_pipeline = Pipeline(
+            types=self.pipeline.types,
+            input=[],  # subdag inputs are provided as pre-staged keys below
+            refs=self.pipeline.refs,
+            dags=self.pipeline.dags,
+            dag=subdag.nodes,
+        )
+        sub_plan = build_plan(sub_pipeline)
+
+        # run the subdag body in-process under a child run scope. The child run
+        # id namespaces the subdag's instance keys under this node+instance, so
+        # the global data-plane tree stays coherent.
+        child_run_id = f"{run_id}/{node.id}/{ikey.as_store_fragment()}"
+        sub_engine = Engine(sub_pipeline, self.store, runner=self.runner,
+                            runners=self.runners, max_concurrency=self.max_concurrency,
+                            store_conf=self.store_conf)
+        try:
+            sub_state = await sub_engine.run_async(sub_plan, parent_inputs, run_id=child_run_id)
+        except EngineError:
+            inst.status = "failed"
+            inst.completed_at = time.time()
+            return inst
+
+        # bind declared outputs: surface each subdag output (from an internal
+        # node, collapsed to the subdag root) at this node's output location
+        output_prefix = f"runs/{run_id}/{node.id}/{ikey.as_store_fragment()}"
+        bound = self._bind_subdag_outputs(subdag, sub_state, output_prefix)
+        inst.output_key = bound.get("output_key")
+        inst.output_cardinality = bound.get("output_cardinality")
+        inst.item_keys = bound.get("item_keys", [])
+        inst.status = "complete"
+        inst.completed_at = time.time()
+        return inst
+
+    def _bind_subdag_outputs(self, subdag, sub_state: RunState, output_prefix: str) -> dict:
+        """Surface the subdag's declared outputs at output_prefix. Each declared
+        output binds to an internal node's root-instance output. With a single
+        declared output we write it as the node's output.json; multiple outputs
+        are written under named keys plus a manifest."""
+        if not subdag.outputs:
+            # default: bind the sole sink node (no declared outputs) — use the
+            # last node's root instance output
+            return {}
+        bound_items = {}
+        primary = None
+        for spec in subdag.outputs:
+            out_name = spec["name"]
+            from_node = spec.get("from") or spec.get("from_node")
+            nr = sub_state.nodes.get(from_node)
+            if nr is None or not nr.instances:
+                continue
+            # collapse to subdag root: the root instance (depth 0) of from_node
+            root_inst = next((i for i in nr.instances if i.instance_key.depth == 0), nr.instances[0])
+            src_key = root_inst.output_key
+            data = self.store.get_json(src_key)
+            dest = f"{output_prefix}/{out_name}.json"
+            self.store.put_json(dest, data)
+            bound_items[out_name] = dest
+            if primary is None:
+                primary = dest
+        # primary output.json points at the first declared output for the parent's
+        # default single-output consumption
+        out_key = f"{output_prefix}/output.json"
+        if primary is not None:
+            self.store.put_json(out_key, self.store.get_json(primary))
+        self.store.put_json(f"{output_prefix}/_manifest.json",
+                            {"output_key": out_key, "outputs": bound_items})
+        return {"output_key": out_key}
 
     async def _run_instance(self, node: PlanNode, ref, state: RunState, run_id: str,
                       ikey: InstanceKey) -> InstanceRecord:
@@ -326,11 +448,23 @@ class Engine:
             "CASCADE_ARGS": json.dumps(node.args),
             "CASCADE_PORTS": json.dumps(ports),
         }
+        # pass the store config down so the container's fetch/stage utilities
+        # build the same store the engine uses — but ONLY for location-
+        # independent stores (S3). A local FileStore's host path is meaningless
+        # inside the container, which instead resolves keys against the bind
+        # mount via CASCADE_STORE_ROOT (set by the SubprocessRunner).
+        if self.store_conf is not None:
+            from .store_config import StoreKind
+            if self.store_conf.kind != StoreKind.file:
+                env["CASCADE_STORE_CONF"] = self.store_conf.to_json()
         spec = RunSpec(run_id=run_id, node_id=node.id, instance_key=ikey.render(),
                        image=ref.image, env=env,
-                       runner_config=ref.runner.config)
+                       runner_config=ref.runner.config, ref_name=ref.name)
 
-        runner = self._runner_for(ref)
+        runner = self._runner_for(ref, node)
+        # run() is the base poll loop (spawn + poll state until done); it returns
+        # the exit code. Uniform across all runner kinds — each only implements
+        # spawn + its handle's state.
         exit_code = await runner.run(spec)
         inst.exit_code = exit_code
         inst.completed_at = time.time()

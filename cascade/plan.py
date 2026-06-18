@@ -27,12 +27,13 @@ class PlanError(Exception):
 
 @dataclass
 class PlanNode:
-    """A node in the flattened, ready-to-run graph."""
-    id: str                       # fully-qualified (subdag-prefixed) id
+    """A node in the ready-to-run graph."""
+    id: str
     ref_name: str
     args: dict
     scatter: str | None
     depends_on: list  # list[Dependency] (reused from model)
+    kind: str = "ref"             # "ref" (leaf container) | "dag" (subdag) | "builtin"
 
 
 @dataclass
@@ -54,43 +55,34 @@ def build_plan(pipeline: Pipeline) -> ExecutionPlan:
 # Flatten
 # --------------------------------------------------------------------------- #
 def _flatten(pipeline: Pipeline) -> dict[str, PlanNode]:
-    """Flatten the root dag, expanding any node that references a named subdag.
-
-    Resolution rule (uniform resolver): a dag node's ref/name is looked up in
-    ``dags:`` first, then ``refs:``.
+    """Resolve each dag node to its kind — a leaf ``ref``, a ``builtin``
+    (in-process reshaping like collect), or a ``dag`` (subdag). Subdags are NOT
+    expanded inline anymore: a subdag node stays a single node, tagged ``dag``,
+    and is spawned as a (dag) runner at execution time, running its body in its
+    own scope under a child instance key. This replaces the old macro-expansion,
+    which couldn't handle $input rewiring / output wiring across the boundary —
+    problems that simply don't exist when the subdag runs in its own scope.
     """
     out: dict[str, PlanNode] = {}
-
-    def emit(node_id: str, node: DagNode, prefix: str) -> None:
-        out[node_id] = PlanNode(
-            id=node_id,
-            ref_name=node.ref_name,
+    for name, node in pipeline.dag.items():
+        target = node.ref_name
+        kind = "ref"
+        if isinstance(target, str) and target.startswith("builtin:"):
+            kind = "builtin"
+        elif pipeline.find_dag(target) is not None:
+            kind = "dag"
+        elif pipeline.find_ref(target) is None:
+            raise PlanError(
+                f"dag node '{name}' references '{target}', which is neither a "
+                f"ref, a named dag, nor a builtin:")
+        out[name] = PlanNode(
+            id=name,
+            ref_name=target,
             args=node.args,
             scatter=node.scatter,
             depends_on=node.depends_on,
+            kind=kind,
         )
-
-    for name, node in pipeline.dag.items():
-        target = node.ref_name
-        sub = pipeline.find_dag(target)
-        if sub is not None:
-            # Expand the subdag inline with a prefix. (Minimal: one level; the
-            # parent's edges into this node and the subdag's $input rewiring are
-            # an extension point flagged below.)
-            for sub_name, sub_node in sub.nodes.items():
-                emit(f"{name}.{sub_name}", sub_node, prefix=name)
-            # NOTE (extension point): rewire the subdag's internal $input
-            # references to this node's depends_on, and rewrite parent edges
-            # that target `name` to point at the subdag's sink nodes. Left
-            # explicit and unhandled in this minimal build; single-level
-            # ref-only pipelines (the moth/bird pipelines) don't need it yet.
-            continue
-        if pipeline.find_ref(target) is None:
-            raise PlanError(
-                f"dag node '{name}' references '{target}', which is neither a "
-                f"ref nor a named dag"
-            )
-        emit(name, node, prefix="")
     return out
 
 

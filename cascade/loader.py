@@ -55,6 +55,33 @@ def load_pipeline_str(text: str) -> Pipeline:
     )
 
 
+def _load_types_file(path) -> TypesSection:
+    """Load a standalone types file (either bare ``structures:`` or wrapped in
+    ``types:``)."""
+    raw = yaml.safe_load(Path(path).read_text()) or {}
+    section = raw.get("types", raw)   # accept {types: {structures:...}} or {structures:...}
+    return _load_types(section or {})
+
+
+def load_project_pipeline(project, pipeline_path=None) -> Pipeline:
+    """Load a pipeline in the context of a ProjectConfig: merge the project's
+    ``include_types`` (shared, reusable across pipelines) into the pipeline's own
+    types. ``pipeline_path`` defaults to the project's ``pipeline_file``.
+
+    Included types are prepended (so a pipeline may still override/extend them);
+    duplicate-name resolution is left to validation.
+    """
+    pp = pipeline_path or project.resolve(project.pipeline_file)
+    pipeline = load_pipeline(str(pp))
+    if project.include_types:
+        merged = []
+        for inc in project.include_types:
+            merged.extend(_load_types_file(project.resolve(inc)).structures)
+        merged.extend(pipeline.types.structures)
+        pipeline.types.structures = merged
+    return pipeline
+
+
 def _load_types(raw: dict[str, Any]) -> TypesSection:
     structures = []
     for s in raw.get("structures") or []:
@@ -138,7 +165,12 @@ def _load_io(raw: dict[str, Any]) -> IoDecl:
 
 
 def _load_named_dag(raw: dict[str, Any]) -> NamedDag:
-    return NamedDag(name=raw["name"], nodes=_load_dag(raw.get("dag") or {}))
+    return NamedDag(
+        name=raw["name"],
+        nodes=_load_dag(raw.get("dag") or {}),
+        inputs=list(raw.get("inputs") or []),
+        outputs=list(raw.get("outputs") or []),
+    )
 
 
 def _load_dag(raw: dict[str, Any]) -> dict[str, DagNode]:
