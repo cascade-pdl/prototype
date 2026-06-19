@@ -41,13 +41,14 @@ class StoreKindConfig(ABC):
     scopes is backend-specific (a path-like backend joins with '/'; another might
     combine differently), so each backend implements it."""
 
-    scope: str | None = None
+    scope: tuple[str, ...] = ()
 
     @abstractmethod
     def subscope(self, segment: str) -> "StoreKindConfig":
-        """Return a copy with the scope narrowed by ``segment``. Backend-specific.
-        Used by the engine to scope by project (then by run): scope is set once
-        per level and the resulting conf flows to nodes already-scoped."""
+        """Return a copy with the scope narrowed by ``segment`` (appended to the
+        scope tuple). Backend-specific only in that each config carries its own
+        fields; the scope itself is a structural tuple of fragments, rendered to
+        an address by the live Store (privately), never here."""
         ...
 
 
@@ -55,11 +56,10 @@ class StoreKindConfig(ABC):
 class FileStoreConfig(StoreKindConfig):
     kind: StoreKind = StoreKind.file
     root: str = "./_cascade_store"
-    scope: str | None = None
+    scope: tuple[str, ...] = ()
 
     def subscope(self, segment: str) -> "FileStoreConfig":
-        s = f"{self.scope}/{segment}" if self.scope else segment
-        return replace(self, scope=s)
+        return replace(self, scope=(*self.scope, segment))
 
 
 @dataclass(kw_only=True)
@@ -68,11 +68,10 @@ class S3StoreConfig(StoreKindConfig):
     bucket: str = ""
     prefix: str = ""
     region: str | None = None
-    scope: str | None = None
+    scope: tuple[str, ...] = ()
 
     def subscope(self, segment: str) -> "S3StoreConfig":
-        s = f"{self.scope}/{segment}" if self.scope else segment
-        return replace(self, scope=s)
+        return replace(self, scope=(*self.scope, segment))
 
 
 _CONFIG_BY_KIND = {
@@ -116,6 +115,9 @@ class StoreConf:
                 f"store config for kind '{kind.value}' has unknown field(s): "
                 f"{sorted(unknown)}; allowed: {sorted(allowed)}"
             )
+        # scope serializes as a JSON list; restore it to a tuple
+        if "scope" in cfg_raw and cfg_raw["scope"] is not None:
+            cfg_raw["scope"] = tuple(cfg_raw["scope"])
         return cls(kind=kind, config=cfg_cls(**cfg_raw))
 
     @classmethod
@@ -154,6 +156,8 @@ def parse_store_conf(raw: dict[str, Any] | None) -> StoreConf:
             f"store config for kind '{kind.value}' has unknown field(s): "
             f"{sorted(unknown)}; allowed: {sorted(allowed)}"
         )
+    if "scope" in cfg_raw and cfg_raw["scope"] is not None:
+        cfg_raw["scope"] = tuple(cfg_raw["scope"])
     return StoreConf(kind=kind, config=cfg_cls(**cfg_raw))
 
 
