@@ -309,7 +309,7 @@ def cmd_prov_docker_build_args(args) -> int:
     return 0
 
 
-def cmd_prov_docker_push_commands(args) -> int:
+def cmd_prov_docker_push_args(args) -> int:
     project, pipeline = _project_and_pipeline(args)
     ref = _find_ref(pipeline, args.ref_name)
     if not _is_remote_image(ref.image):
@@ -317,7 +317,8 @@ def cmd_prov_docker_push_commands(args) -> int:
             f"ref '{ref.name}' image '{ref.image}' is not a remote reference; "
             f"nothing to push\n")
         return 2
-    print(f"docker push {ref.image}")
+    # emit the arg for `docker push $(...)` — symmetric with build-args
+    print(ref.image)
     return 0
 
 
@@ -337,19 +338,12 @@ def cmd_prov_ecs_gen_repository(args) -> int:
     return 0
 
 
-def cmd_prov_ecs_gen_taskdef(args) -> int:
-    project, pipeline = _project_and_pipeline(args)
-    ref = _find_ref(pipeline, args.ref_name)
-    deployment = _load_deployment(args.deployment_file)
-    if ref.runner.kind != RunnerKind.ecs_task:
-        sys.stderr.write(f"ref '{ref.name}' is not an ecs-task ref\n")
-        return 2
+def build_taskdef(project, ref, deployment) -> dict:
+    """Pure: construct the ECS task definition dict for a ref. The image is the
+    ref's authoritative declared image; the family/container/log names come from
+    the shared naming convention; cpu/memory from the ref; roles/log from the
+    deployment. Importable and testable without the CLI."""
     ecs = deployment.ecs
-    if ecs is None:
-        sys.stderr.write("deployment has no ecs runners block\n")
-        return 2
-    # authoritative: the taskdef pins exactly the ref's declared image
-    image = ref.image
     cfg = ref.runner.config
     cpu = getattr(cfg, "cpu", None)
     memory = getattr(cfg, "memory", None)
@@ -362,7 +356,7 @@ def cmd_prov_ecs_gen_taskdef(args) -> int:
         "memory": str(memory or 512),
         "containerDefinitions": [{
             "name": naming.container_name(ref.name),
-            "image": image,
+            "image": ref.image,                 # authoritative
             "essential": True,
             "logConfiguration": {
                 "logDriver": "awslogs",
@@ -378,7 +372,20 @@ def cmd_prov_ecs_gen_taskdef(args) -> int:
         taskdef["executionRoleArn"] = ecs.execution_role
     if ecs.task_role:
         taskdef["taskRoleArn"] = ecs.task_role
-    print(json.dumps(taskdef, indent=2))
+    return taskdef
+
+
+def cmd_prov_ecs_gen_taskdef(args) -> int:
+    project, pipeline = _project_and_pipeline(args)
+    ref = _find_ref(pipeline, args.ref_name)
+    deployment = _load_deployment(args.deployment_file)
+    if ref.runner.kind != RunnerKind.ecs_task:
+        sys.stderr.write(f"ref '{ref.name}' is not an ecs-task ref\n")
+        return 2
+    if deployment.ecs is None:
+        sys.stderr.write("deployment has no ecs runners block\n")
+        return 2
+    print(json.dumps(build_taskdef(project, ref, deployment), indent=2))
     return 0
 
 
@@ -421,7 +428,7 @@ def add_provisioning_subcommands(sub):
     dsub = d.add_subparsers(dest="docker_cmd", required=True)
     for cmd, fn, helptext in [
         ("build-args", cmd_prov_docker_build_args, "args for `docker build $(...)` (uses ref.image)"),
-        ("push-commands", cmd_prov_docker_push_commands, "push command for a remote-image ref"),
+        ("push-args", cmd_prov_docker_push_args, "image arg for `docker push $(...)` (remote-image ref)"),
     ]:
         c = dsub.add_parser(cmd, help=helptext)
         c.add_argument("--ref-name", required=True)
