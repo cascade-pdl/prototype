@@ -46,6 +46,7 @@ class ProjectError(Exception):
 @dataclass
 class ProjectConfig:
     name: str
+    scope: str
     version: str = "0.0.1"
     maintainers: list[str] = field(default_factory=list)
     description: str = ""
@@ -80,8 +81,17 @@ class ProjectConfig:
         if "name" not in proj:
             raise ProjectError(f"{p}: [cascade-project] requires a 'name'")
         cls.validate_name(proj["name"])
+        # scope is REQUIRED and non-nullable: it sub-scopes this project's data
+        # in the (shared) store, independent of the store backend. No project may
+        # be un-partitioned, so absence is a hard error.
+        if not proj.get("scope"):
+            raise ProjectError(
+                f"{p}: [cascade-project] requires a 'scope' (the store sub-scope "
+                f"for this project's data, e.g. scope = \"{proj['name']}\")")
+        cls.validate_name(proj["scope"])   # same registry-safe rules
         return cls(
             name=proj["name"],
+            scope=proj["scope"],
             version=str(proj.get("version", "0.0.1")),
             maintainers=list(proj.get("maintainers") or []),
             description=proj.get("description", ""),

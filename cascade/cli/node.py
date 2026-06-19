@@ -130,6 +130,7 @@ def _add_store_args(p):
     p.add_argument("--runner-config", default=None,
                    help="deployment config YAML (used if CASCADE_STORE_CONF is unset)")
     p.add_argument("--store", default=None, help="local file-store root override")
+    p.add_argument("--project-file", default="cascade.toml")
 
 
 def add_subcommands(sub):

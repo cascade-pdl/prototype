@@ -276,6 +276,7 @@ def cmd_authoring_new(args) -> int:
     (target / "cascade.toml").write_text(
         f'[cascade-project]\n'
         f'name = "{project_name}"\n'
+        f'scope = "{project_name}"\n'
         f'version = "0.0.1"\n'
         f'maintainers = []\n'
         f'description = "{project_name}"\n'

@@ -23,10 +23,11 @@ def cmd_run(args) -> int:
     inputs = parse_inputs(args.input)
 
     deployment, deploy_path = load_deployment(args)
-    store = store_from_deployment(deployment, args)
+    project = load_project(args, required=False)
+    store_conf, store = store_from_deployment(deployment, args, project)
 
     if args.dry_run:
-        engine = Engine(pipeline, store, EchoRunner(), store_conf=deployment.store)
+        engine = Engine(pipeline, store, EchoRunner(), store_conf=store_conf)
         state = engine.run(plan, inputs, run_id=args.run_id)
         print(f"\nrun {state.run_id}: {state.status}")
         return 0 if state.status == "complete" else 1
@@ -43,16 +44,14 @@ def cmd_run(args) -> int:
                   "deployment.yaml in the working directory)")
         return 1
 
-    # project name (from cascade.toml, if present) lets the ECS runner derive the
-    # conventional taskdef family — matching what provisioning created
-    project = load_project(args, required=False)
+    # the ECS runner derives the conventional taskdef family from the project name
     project_name = project.name if project else None
 
     from ..store_config import StoreKind
-    store_root = args.store if deployment.store.kind == StoreKind.file else None
+    store_root = args.store if store_conf.kind == StoreKind.file else None
     registry = RunnerRegistry(deployment, store_root=store_root, project_name=project_name)
     engine = Engine(pipeline, store, runners=registry,
-                    max_concurrency=args.max_concurrency, store_conf=deployment.store)
+                    max_concurrency=args.max_concurrency, store_conf=store_conf)
     state = engine.run(plan, inputs, run_id=args.run_id)
     print(f"\nrun {state.run_id}: {state.status}")
     print(f"run state: runs/{state.run_id}/_run_state.json")

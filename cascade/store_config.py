@@ -15,7 +15,8 @@ portable across environments.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, asdict, replace
 from enum import Enum
 from typing import Any
 
@@ -25,21 +26,54 @@ class StoreKind(str, Enum):
     s3 = "s3"
 
 
-@dataclass
-class FileStoreConfig:
+class StoreKindConfig(ABC):
+    """Per-backend store configuration: a serializable *description* of a store.
+
+    Carries a ``scope`` — a sub-region of the keyspace this store operates
+    within — as a field SEPARATE from the backend's base location (root/prefix).
+    Keeping them separate is deliberate: the subprocess runner must rewrite the
+    *base* (host path -> container mount) while preserving the *scope*, which is
+    only possible if they were never fused. How scope combines with the base to
+    address a key is the live Store's private business (path-join, prefix-join,
+    ...); the config just carries the two pieces.
+
+    ``subscope`` narrows the scope by a segment and is abstract — combining
+    scopes is backend-specific (a path-like backend joins with '/'; another might
+    combine differently), so each backend implements it."""
+
+    scope: str | None = None
+
+    @abstractmethod
+    def subscope(self, segment: str) -> "StoreKindConfig":
+        """Return a copy with the scope narrowed by ``segment``. Backend-specific.
+        Used by the engine to scope by project (then by run): scope is set once
+        per level and the resulting conf flows to nodes already-scoped."""
+        ...
+
+
+@dataclass(kw_only=True)
+class FileStoreConfig(StoreKindConfig):
     kind: StoreKind = StoreKind.file
     root: str = "./_cascade_store"
+    scope: str | None = None
+
+    def subscope(self, segment: str) -> "FileStoreConfig":
+        s = f"{self.scope}/{segment}" if self.scope else segment
+        return replace(self, scope=s)
 
 
-@dataclass
-class S3StoreConfig:
+@dataclass(kw_only=True)
+class S3StoreConfig(StoreKindConfig):
     kind: StoreKind = StoreKind.s3
     bucket: str = ""
     prefix: str = ""
     region: str | None = None
+    scope: str | None = None
 
+    def subscope(self, segment: str) -> "S3StoreConfig":
+        s = f"{self.scope}/{segment}" if self.scope else segment
+        return replace(self, scope=s)
 
-StoreKindConfig = FileStoreConfig | S3StoreConfig
 
 _CONFIG_BY_KIND = {
     StoreKind.file: FileStoreConfig,
@@ -88,6 +122,14 @@ class StoreConf:
     def from_json(cls, blob: str) -> "StoreConf":
         return cls.from_dict(json.loads(blob))
 
+    def subscope(self, segment: str) -> "StoreConf":
+        """Return a new StoreConf with the scope narrowed by ``segment`` —
+        delegates to the backend config's subscope. The engine scopes by project
+        (then by run); the resulting conf flows everywhere (rigged for
+        subprocess, shipped to nodes), so the scope travels for free and nodes
+        must NOT subscope again."""
+        return StoreConf(kind=self.kind, config=self.config.subscope(segment))
+
 
 def parse_store_conf(raw: dict[str, Any] | None) -> StoreConf:
     """Parse a deployment-file ``store:`` section. Accepts:
@@ -120,8 +162,8 @@ def build_store(conf: StoreConf):
     (store.py imports nothing from here; here we import from store.py)."""
     from .store import FileStore, S3Store
     if conf.kind == StoreKind.file:
-        return FileStore(conf.config.root)
+        return FileStore(conf.config.root, scope=conf.config.scope)
     if conf.kind == StoreKind.s3:
         c = conf.config
-        return S3Store(bucket=c.bucket, prefix=c.prefix, region=c.region)
+        return S3Store(bucket=c.bucket, prefix=c.prefix, region=c.region, scope=c.scope)
     raise ValueError(f"no store implementation for kind '{conf.kind}'")

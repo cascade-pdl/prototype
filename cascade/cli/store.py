@@ -26,7 +26,12 @@ def cmd_fetch(args) -> int:
 
 def cmd_stage(args) -> int:
     store = store_resolve(args)
-    store.put(args.key, Path(args.from_).read_bytes())
+    if args.from_ == "-":
+        import sys
+        data = sys.stdin.buffer.read()
+    else:
+        data = Path(args.from_).read_bytes()
+    store.put(args.key, data)
     print(args.key)
     return 0
 
@@ -62,6 +67,10 @@ def _add_store_args(p):
     p.add_argument("--runner-config", default=None,
                    help="deployment config YAML (used if CASCADE_STORE_CONF is unset)")
     p.add_argument("--store", default=None, help="local file-store root override")
+    p.add_argument("--project-file", default="cascade.toml",
+                   help="project config (its scope sub-scopes the store, laptop-side)")
+    p.add_argument("--unscoped", action="store_true",
+                   help="bypass the project scope (operate at the store root)")
 
 
 def add_subcommands(sub):

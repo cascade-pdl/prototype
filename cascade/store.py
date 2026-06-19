@@ -42,8 +42,12 @@ class Store(ABC):
 class FileStore(Store):
     """A local directory store. ``root/<key>`` is the file for ``key``."""
 
-    def __init__(self, root: str | Path):
-        self.root = Path(root)
+    def __init__(self, root: str | Path, scope: str | None = None):
+        # scope narrows the keyspace to a sub-region; for a file store it's a
+        # path segment under root. The config keeps root and scope separate (so
+        # the subprocess runner can rewrite root while preserving scope); once
+        # built, the store folds them into one effective root.
+        self.root = Path(root) / scope if scope else Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
@@ -83,11 +87,16 @@ class S3Store(Store):
     engine and runner don't care which backend they talk to.
     """
 
-    def __init__(self, bucket: str, prefix: str = "", region: str | None = None):
+    def __init__(self, bucket: str, prefix: str = "", region: str | None = None,
+                 scope: str | None = None):
         if not bucket:
             raise ValueError("S3Store requires a bucket")
         self.bucket = bucket
-        self.prefix = prefix.rstrip("/")
+        # scope narrows the keyspace; for S3 it folds into the effective prefix.
+        # The config keeps prefix and scope separate (so the rigging can rewrite
+        # one without disturbing the other); the built store folds them.
+        eff = f"{prefix.rstrip('/')}/{scope}" if (prefix and scope) else (scope or prefix)
+        self.prefix = (eff or "").rstrip("/")
         self.region = region
         self._client = None  # lazy: only build the boto3 client when first used
 

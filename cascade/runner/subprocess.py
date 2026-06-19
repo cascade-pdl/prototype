@@ -59,10 +59,12 @@ class SubprocessRunner(Runner):
         self.home = home
 
     def _rig_store_conf(self, blob: str) -> str:
-        """Rewrite a local FileStore's root to the container's mount point, so
-        the container builds an equivalent store against the bind mount. S3 (and
-        any non-file) confs pass through unchanged. Store keys are root-relative,
-        so only the root differs between engine (host path) and container (mount)."""
+        """Rewrite a local FileStore's ROOT to the container mount, PRESERVING the
+        scope. Root and scope are separate config fields, so this is clean: the
+        container builds FileStore(root=/store, scope=<unchanged>), addressing the
+        same files through the bind mount. S3 (and any non-file) confs pass
+        through unchanged. (Keys are root+scope-relative, so only root differs
+        between host and container; scope is identical on both sides.)"""
         from ..store_config import StoreConf, StoreKind, FileStoreConfig
         try:
             conf = StoreConf.from_json(blob)
@@ -70,7 +72,8 @@ class SubprocessRunner(Runner):
             return blob
         if conf.kind == StoreKind.file:
             conf = StoreConf(kind=StoreKind.file,
-                             config=FileStoreConfig(root=self.container_store))
+                             config=FileStoreConfig(root=self.container_store,
+                                                    scope=conf.config.scope))
             return conf.to_json()
         return blob
 

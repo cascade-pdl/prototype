@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from .utils import load_deployment, store_from_deployment
+from .utils import load_deployment, load_project, store_from_deployment
 
 
 def cmd_query(args) -> int:
     deployment, _ = load_deployment(args)
-    store = store_from_deployment(deployment, args)
+    project = load_project(args, required=False)
+    _, store = store_from_deployment(deployment, args, project)
 
     key = f"runs/{args.run_id}/_run_state.json"
     if not store.has(key):
@@ -40,6 +41,7 @@ def add_subcommands(sub):
                         "./deployment.yaml is used when present.")
     p.add_argument("--store", default="./_cascade_store",
                    help="file-store root (only when the store is a local file store)")
+    p.add_argument("--project-file", default="cascade.toml")
     p.add_argument("--node", default=None)
     p.add_argument("--instance", default=None)
     p.set_defaults(func=cmd_query)

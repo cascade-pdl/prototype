@@ -65,42 +65,61 @@ def load_deployment(args):
 # --------------------------------------------------------------------------- #
 # store resolution — the single escalation chain
 # --------------------------------------------------------------------------- #
+def _project_scope(args):
+    """The project's store scope, if a cascade.toml is resolvable; else None
+    (a node-side caller has no project file — its conf is already scoped)."""
+    proj = load_project(args, required=False)
+    return proj.scope if proj else None
+
+
 def store_resolve(args, *, allow_env: bool = True):
     """Resolve a Store by escalation:
-        1. CASCADE_STORE_CONF env (in-container; the engine set it) [if allow_env]
-        2. deployment.store (from --runner-config / ./deployment.yaml)
-        3. --store file root (local file store)
-        4. default ./_cascade_store file store
-    Returns the built Store. `allow_env=False` skips step 1 (engine-side callers
-    that must use the deployment, not whatever env they happen to have)."""
+        1. CASCADE_STORE_CONF env (in-container; already scoped) [if allow_env]
+        2. deployment.store, scoped by the project scope (cascade.toml)
+        3. --store file root (scoped by the project scope)
+        4. default ./_cascade_store file store (scoped)
+    Step 1 is already-scoped (the engine baked the project scope into the conf
+    before shipping it), so it is NOT scoped again. Steps 2-4 are laptop-side and
+    DO scope by the project scope when a cascade.toml is present, so
+    `cascade store stage` on a laptop lands in the project's scope. The
+    --unscoped flag bypasses project scoping (operate at the store root)."""
     from ..store_config import (
         StoreConf, build_store, StoreKind, FileStoreConfig,
     )
-    # 1. env (node / in-container)
+    # 1. env (node / in-container) — already scoped; use verbatim
     if allow_env:
         blob = os.environ.get("CASCADE_STORE_CONF")
         if blob:
             return build_store(StoreConf.from_json(blob))
-    # 2. deployment
+    # 2-4. laptop-side: build from deployment / --store, then scope by project
     deployment, _ = load_deployment(args)
     if deployment.store is not None and deployment.store.kind != StoreKind.file:
-        return build_store(deployment.store)
-    # 3/4. file store: --store override or default
-    if deployment.store is not None and deployment.store.kind == StoreKind.file:
-        root = getattr(args, "store", None) or deployment.store.config.root
+        conf = deployment.store
     else:
-        root = getattr(args, "store", None) or "./_cascade_store"
-    return build_store(StoreConf(kind=StoreKind.file, config=FileStoreConfig(root=root)))
+        if deployment.store is not None and deployment.store.kind == StoreKind.file:
+            root = getattr(args, "store", None) or deployment.store.config.root
+        else:
+            root = getattr(args, "store", None) or "./_cascade_store"
+        conf = StoreConf(kind=StoreKind.file, config=FileStoreConfig(root=root))
+    if not getattr(args, "unscoped", False):
+        scope = _project_scope(args)
+        if scope:
+            conf = conf.subscope(scope)
+    return build_store(conf)
 
 
-def store_from_deployment(deployment, args):
-    """Engine-side store: from the deployment, with --store overriding a file
-    root. (run/query use this — they always start from the loaded deployment.)"""
+def store_from_deployment(deployment, args, project=None):
+    """Engine-side store: from the deployment, scoped by the project scope, with
+    --store overriding a file root. (run/query use this.) Returns (conf, store)
+    so the caller can ship the already-scoped conf to nodes."""
     from ..store_config import build_store, StoreKind, FileStoreConfig, StoreConf
-    if deployment.store.kind == StoreKind.file and getattr(args, "store", None):
-        deployment.store = StoreConf(kind=StoreKind.file,
-                                     config=FileStoreConfig(root=args.store))
-    return build_store(deployment.store)
+    conf = deployment.store
+    if conf.kind == StoreKind.file and getattr(args, "store", None):
+        conf = StoreConf(kind=StoreKind.file, config=FileStoreConfig(root=args.store))
+    scope = project.scope if project else _project_scope(args)
+    if scope:
+        conf = conf.subscope(scope)
+    return conf, build_store(conf)
 
 
 # --------------------------------------------------------------------------- #
