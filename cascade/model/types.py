@@ -16,6 +16,9 @@ class FieldDecl:
     def decode(cls, raw: dict[str, Any]) -> Self:
         return cls(name=raw["name"], type=raw["type"])
 
+    def encode(self) -> dict[str, Any]:
+        return {"name": self.name, "type": self.type}
+
 
 @dataclass
 class Structure:
@@ -34,6 +37,13 @@ class Structure:
             extends=raw.get("extends"),
         )
 
+    def encode(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "fields": [f.encode() for f in self.fields],
+            "extends": self.extends,
+        }
+
 
 @dataclass
 class TypesSection:
@@ -41,9 +51,11 @@ class TypesSection:
 
     @classmethod
     def decode(cls, raw: dict[str, Any] | list[dict[str, Any]]) -> Self:
-        # Accepts either {"structures": [...]} or a bare list of structures.
         items = raw.get("structures", []) if isinstance(raw, dict) else raw
         return cls(structures=[Structure.decode(s) for s in items])
+
+    def encode(self) -> dict[str, Any]:
+        return {"structures": [s.encode() for s in self.structures]}
 
 
 class DataFormat(str, Enum):
@@ -69,6 +81,9 @@ class IoConfig:
             mapping=dict(raw.get("mapping", {})),
         )
 
+    def encode(self) -> dict[str, Any]:
+        return {"encoding": self.encoding.value, "mapping": dict(self.mapping)}
+
 
 @dataclass
 class IoDecl(IOField):
@@ -83,3 +98,6 @@ class IoDecl(IOField):
             type=raw["type"],
             config=IoConfig.decode(raw.get("config", {})),
         )
+
+    def encode(self) -> dict[str, Any]:
+        return {"name": self.name, "type": self.type, "config": self.config.encode()}

@@ -32,7 +32,7 @@ class SubprocessOverride(RunnerOverrides):
 
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> Self:
-        return cls(**raw)
+        return cls(memory=raw.get("memory"), cpu=raw.get("cpu"))
 
 
 @dataclass
@@ -43,7 +43,11 @@ class DockerOverride(RunnerOverrides):
 
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> Self:
-        return cls(**raw)
+        return cls(
+            no_pull=raw.get("no_pull"),
+            memory=raw.get("memory"),
+            cpu=raw.get("cpu"),
+        )
 
 
 RUNNER_OVERRIDES: Mapping[RunnerKind, Type[RunnerOverrides]] = {

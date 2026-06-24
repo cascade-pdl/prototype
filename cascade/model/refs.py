@@ -40,15 +40,15 @@ class Ref:
     output: list[IoDecl] = field(default_factory=list)
 
     @classmethod
-    def decode(cls, raw: dict[str, Any]):
+    def decode(cls, raw: dict[str, Any]) -> "Ref":
         kind = RunnerKind(raw["runner"])
         return cls(
             name=raw["name"],
             runner=kind,
             config=decode(kind, raw["config"]),
             overrides=parse(kind, raw.get("overrides", None)),
-            input=[IoDecl(**inp) for inp in raw.get("input", [])],
-            output=[IoDecl(**outp) for outp in raw.get("output", [])],
+            input=[IoDecl.decode(i) for i in raw.get("input", [])],
+            output=[IoDecl.decode(o) for o in raw.get("output", [])],
         )
 
     def output_field(self, name: str | None) -> IoDecl | None:

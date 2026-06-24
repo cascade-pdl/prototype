@@ -1,11 +1,12 @@
-from typing import Any, Self
+from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Self
 
 
 @dataclass
 class Dependency:
-    """One incoming edge of a dag node"""
+    """One incoming edge of a dag node."""
 
     node: str
     field: str | None = None
@@ -23,7 +24,16 @@ class Dependency:
         return cls(
             node=raw["node"],
             field=raw.get("field"),
-            as_=raw.get("as"),
+            as_=raw.get("as"),  # 'as' is a keyword; stored as as_
             mode=raw.get("mode", "single"),
             merge=raw.get("merge", "concat"),
         )
+
+    def encode(self) -> dict[str, Any]:
+        return {
+            "node": self.node,
+            "field": self.field,
+            "as": self.as_,
+            "mode": self.mode,
+            "merge": self.merge,
+        }

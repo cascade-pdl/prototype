@@ -1,29 +1,22 @@
-"""Build the shared ``Graph`` from the model.
-
-These builders are also the *structural validation* pass: constructing the
-call graph surfaces unknown refs/dags, and the topological order (via the
-graph's graphlib backing) surfaces cycles — before any type work happens.
-
-There is one graph *type* (cascade.plan.graph.Graph) and these are the only
-places a graph is built from the model, so traversal/ordering/cycle logic lives
-in exactly one implementation.
+"""Build the shared Graph from the model. These builders are also the structural
+validation pass: building the call graph surfaces unknown runnables, and the
+topological order surfaces cycles — before any type work.
 """
+
 from __future__ import annotations
 
+from cascade.graph import Graph, GraphError
 from cascade.model.pipeline import Pipeline
 from cascade.model.dag import Dag
 from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
-from cascade.plan.graph import Graph, GraphError
 
 
 def node_graph(dag: Dag) -> Graph[DagNode, Dependency]:
-    """Per-dag structural graph: nodes are DagNodes, edges are *intra-dag*
-    dependencies (upstream -> node). ``$input`` and references to nodes outside
-    this dag are boundary edges, not graph edges — they resolve against the dag
-    input, handled by the elaborator. This is the same graph the nested executor
-    runs ``waves()`` over.
-    """
+    """Per-dag structural graph: nodes are DagNodes, edges are intra-dag
+    dependencies (upstream -> node). ``$input`` and out-of-dag references are
+    boundary edges, resolved against the dag input by the elaborator, not graph
+    edges. This is the same graph the executor runs ``waves()`` over."""
     g: Graph[DagNode, Dependency] = Graph()
     local = {n.name for n in dag.nodes}
     for n in dag.nodes:
@@ -41,19 +34,28 @@ def node_graph(dag: Dag) -> Graph[DagNode, Dependency]:
     return g
 
 
+def build_call_and_node_graphs(
+    pipeline: Pipeline,
+) -> tuple[list[str], dict[str, Graph[DagNode, Dependency]]]:
+    """Build every graph once: returns the call-graph topological order (callees
+    first) and the per-dag node graphs. This is the single place graphs are built
+    for a compile, so no pass rebuilds them."""
+    order = call_graph(pipeline).static_order()
+    node_graphs = {dag.name: node_graph(dag) for dag in pipeline.dags}
+    return order, node_graphs
+
+
 def call_graph(pipeline: Pipeline) -> Graph[str, None]:
-    """Dag-call graph across runnables. Edge is callee -> caller, so topological
-    order yields callees (refs, inner dags) before callers — the order in which
-    signatures must be resolved. Building it validates that every node's
-    ``ref_name`` resolves to a real runnable.
-    """
+    """Dag-call graph across runnables; edge callee -> caller, so topological
+    order yields callees before callers. Building it validates that every node's
+    runnable resolves to a defined ref or dag."""
     g: Graph[str, None] = Graph()
     for r in (*pipeline.refs, *pipeline.dags):
         g.add_node(r.name, None)
     for dag in pipeline.dags:
         seen: set[str] = set()
         for node in dag.nodes:
-            callee = node.ref_name
+            callee = node.runnable_name
             if callee not in g:
                 raise GraphError(
                     f"dag {dag.name!r}: node {node.name!r} runs {callee!r}, "
@@ -61,5 +63,5 @@ def call_graph(pipeline: Pipeline) -> Graph[str, None]:
                 )
             if callee != dag.name and callee not in seen:
                 seen.add(callee)
-                g.add_edge(callee, dag.name, None)  # callee precedes caller
+                g.add_edge(callee, dag.name, None)
     return g
