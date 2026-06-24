@@ -6,7 +6,7 @@ authors = [
     {name = "Lorenzo Trojan",email = "ltrojan@wildersensing.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     "pyyaml (>=6.0.3,<7.0.0)"
 ]
@@ -29,4 +29,9 @@ debugpy = "^1.8.21"
 rope = "^1.14.0"
 pylsp-rope = "^0.1.17"
 python-lsp-black = "^2.0.0"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.1.1"
+pytest-asyncio = "^1.4.0"
 
