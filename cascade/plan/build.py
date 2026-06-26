@@ -34,17 +34,6 @@ def node_graph(dag: Dag) -> Graph[DagNode, Dependency]:
     return g
 
 
-def build_call_and_node_graphs(
-    pipeline: Pipeline,
-) -> tuple[list[str], dict[str, Graph[DagNode, Dependency]]]:
-    """Build every graph once: returns the call-graph topological order (callees
-    first) and the per-dag node graphs. This is the single place graphs are built
-    for a compile, so no pass rebuilds them."""
-    order = call_graph(pipeline).static_order()
-    node_graphs = {dag.name: node_graph(dag) for dag in pipeline.dags}
-    return order, node_graphs
-
-
 def call_graph(pipeline: Pipeline) -> Graph[str, None]:
     """Dag-call graph across runnables; edge callee -> caller, so topological
     order yields callees before callers. Building it validates that every node's
@@ -65,3 +54,14 @@ def call_graph(pipeline: Pipeline) -> Graph[str, None]:
                 seen.add(callee)
                 g.add_edge(callee, dag.name, None)
     return g
+
+
+def build_plan_graphs(
+    pipeline: Pipeline,
+) -> tuple[list[str], dict[str, Graph[DagNode, Dependency]]]:
+    """Build every graph once: returns the call-graph topological order (callees
+    first) and the per-dag node graphs. This is the single place graphs are built
+    for a compile, so no pass rebuilds them."""
+    order = call_graph(pipeline).static_order()
+    node_graphs = {dag.name: node_graph(dag) for dag in pipeline.dags}
+    return order, node_graphs
