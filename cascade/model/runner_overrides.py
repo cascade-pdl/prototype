@@ -1,4 +1,10 @@
-"""Runner vocabulary, per-node config, and deployment config."""
+"""Per-ref runner overrides (cpu/memory/no_pull tuning), tagged by RunnerKind.
+
+The second half of a ref's run config. ``parse(kind, raw)`` decodes (and tolerates
+None / kinds with no overrides); ``encode`` is a method. Carried in the Plan
+alongside RefData so the executor can merge ref config + overrides + deployment
+defaults at spawn time.
+"""
 
 from __future__ import annotations
 
@@ -10,19 +16,15 @@ from cascade.model.runner_kinds import RunnerKind
 
 
 class RunnerOverrides(ABC):
-    """Per-ref runner config
-
-    * each ref can override a runner configuration
-    * at runtime, runner ref config and runner config are merged
-    * not all runners can be configured on a per ref basis
-    * see the registry below
-
-    loaded from pipeline.refs[].runner_config
-    """
+    """Per-ref runner config. Not every runner kind supports overrides (see the
+    registry below); a kind with no entry simply has no overrides."""
 
     @classmethod
     @abstractmethod
     def decode(cls, raw: dict[str, Any]) -> Self: ...
+
+    @abstractmethod
+    def encode(self) -> dict[str, Any]: ...
 
 
 @dataclass
@@ -33,6 +35,9 @@ class SubprocessOverride(RunnerOverrides):
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> Self:
         return cls(memory=raw.get("memory"), cpu=raw.get("cpu"))
+
+    def encode(self) -> dict[str, Any]:
+        return {"memory": self.memory, "cpu": self.cpu}
 
 
 @dataclass
@@ -48,6 +53,9 @@ class DockerOverride(RunnerOverrides):
             memory=raw.get("memory"),
             cpu=raw.get("cpu"),
         )
+
+    def encode(self) -> dict[str, Any]:
+        return {"no_pull": self.no_pull, "memory": self.memory, "cpu": self.cpu}
 
 
 RUNNER_OVERRIDES: Mapping[RunnerKind, Type[RunnerOverrides]] = {
