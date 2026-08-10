@@ -48,16 +48,31 @@ def from_kind(kind: StoreKind) -> RegEntry:
     return _BY_KIND[kind]
 
 
-def encode(store: Store) -> dict[str, Any]:
-    kind, *_ = from_store(store)
-    return {
-        "kind": kind.value,
-        "config": store.config.encode(),
-    }
-
-
-def decode(raw: dict[str, Any]) -> Store:
+def encode_config(config: StoreConfig) -> dict[str, Any]:
+    """An inert ``StoreConfig`` as a ``{kind, config}`` block, tagged by backend.
+ 
+    The config-level twin of :func:`encode`. The deployment loader wants this
+    form — a spec, not a live store — while sharing the one envelope defined here.
+    """
+    kind, *_ = from_config(config)
+    return {"kind": kind.value, "config": config.encode()}
+ 
+ 
+def decode_config(raw: dict[str, Any]) -> StoreConfig:
+    """Decode a ``{kind, config}`` block to the concrete ``StoreConfig`` — no live
+    ``Store`` is built (no mkdir / no boto client). The twin of :func:`decode`."""
     kind = StoreKind(raw["kind"])
-    _kind, store_cls, config_cls = from_kind(kind)
-    assert kind == _kind
-    return store_cls(config_cls.decode(raw["config"]))
+    _kind, _store_cls, config_cls = from_kind(kind)
+    return config_cls.decode(raw["config"])
+ 
+ 
+def encode(store: Store) -> dict[str, Any]:
+    """A live ``Store`` as a ``{kind, config}`` block (used for CASCADE_STORE_CONF)."""
+    return encode_config(store.config)
+ 
+ 
+def decode(raw: dict[str, Any]) -> Store:
+    """Decode a ``{kind, config}`` block to a live ``Store`` (materialises the backend)."""
+    config = decode_config(raw)
+    _kind, store_cls, _config_cls = from_config(config)
+    return store_cls(config)
