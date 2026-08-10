@@ -48,6 +48,22 @@ def check_plan_integrity(plan: Plan) -> list[str]:
         if extra:
             errors.append(f"signatures for undefined runnables: {extra}")
 
+    # dag_outputs must key on known dags, and each output edge must resolve to a
+    # node in that dag (an ``$input`` pass-through is allowed)
+    for dag_name, deps in plan.dag_outputs.items():
+        if dag_name not in plan.node_graphs:
+            errors.append(f"dag_outputs names {dag_name!r}, which is not a defined dag")
+            continue
+        g = plan.node_graphs[dag_name]
+        for dep in deps:
+            if dep.is_input:
+                continue
+            if dep.node not in g:
+                errors.append(
+                    f"dag {dag_name!r}: output edge references node {dep.node!r}, "
+                    f"which is not a node in this dag"
+                )
+
     # the entrypoint must resolve
     if plan.entrypoint not in defined:
         errors.append(f"entrypoint {plan.entrypoint!r} is not a defined ref or dag")

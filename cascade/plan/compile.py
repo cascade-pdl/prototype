@@ -41,11 +41,13 @@ def compile_pipeline(pipeline: Pipeline) -> Plan:
     signatures = elaborate(pipeline, node_graphs, order)
     type_env = resolve_types(pipeline)
     run_config = {r.name: RunConfig.from_ref(r) for r in pipeline.refs}
+    dag_outputs = {d.name: d.output for d in pipeline.dags}
     return Plan(
         entrypoint=pipeline.entrypoint,
         node_graphs=node_graphs,
         signatures=signatures,
         run_config=run_config,
+        dag_outputs=dag_outputs,
         type_env=type_env,
     )
 

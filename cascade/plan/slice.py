@@ -32,6 +32,7 @@ def slice_plan(plan: Plan, root: str) -> Plan:
         node_graphs={n: g for n, g in plan.node_graphs.items() if n in keep},
         signatures={n: s for n, s in plan.signatures.items() if n in keep},
         run_config={n: c for n, c in plan.run_config.items() if n in keep},
+        dag_outputs={n: o for n, o in plan.dag_outputs.items() if n in keep},
         type_env=plan.type_env,
         version=plan.version,
     )

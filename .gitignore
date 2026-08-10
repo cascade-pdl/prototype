@@ -17,3 +17,4 @@ env.default
 # cascade artifacts
 _cascade_store/
 _store/
+.vscode/settings.json

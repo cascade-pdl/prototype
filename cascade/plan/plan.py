@@ -13,7 +13,7 @@ is checked on decode so a stale .plan fails loudly rather than misparses.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from cascade.graph import Graph
@@ -24,7 +24,7 @@ from cascade.plan.type_env import TypeEnv
 from cascade.plan.run_config import RunConfig
 
 
-PLAN_VERSION = 1
+PLAN_VERSION = 2
 
 
 class PlanVersionError(Exception):
@@ -38,6 +38,7 @@ class Plan:
     signatures: dict[str, Signature]
     run_config: dict[str, RunConfig]
     type_env: TypeEnv
+    dag_outputs: dict[str, list[Dependency]] = field(default_factory=dict)
     version: int = PLAN_VERSION
 
     def encode(self) -> dict[str, Any]:
@@ -50,6 +51,10 @@ class Plan:
             },
             "signatures": {name: s.encode() for name, s in self.signatures.items()},
             "run_config": {name: c.encode() for name, c in self.run_config.items()},
+            "dag_outputs": {
+                name: [dep.encode() for dep in deps]
+                for name, deps in self.dag_outputs.items()
+            },
             "type_env": self.type_env.encode(),
         }
 
@@ -69,5 +74,9 @@ class Plan:
             },
             signatures={name: Signature.decode(s) for name, s in raw["signatures"].items()},
             run_config={name: RunConfig.decode(c) for name, c in raw["run_config"].items()},
+            dag_outputs={
+                name: [Dependency.decode(dep) for dep in deps]
+                for name, deps in raw.get("dag_outputs", {}).items()
+            },
             type_env=TypeEnv.decode(raw["type_env"]),
         )
