@@ -78,3 +78,23 @@ def test_find_project_returns_project_and_root(tmp_path):
     assert resolved_root == root
     assert proj.pipeline_file(resolved_root) == root / "pipeline.yaml"
     assert proj.deployment_file(resolved_root) == root / "deployment.yaml"
+
+
+def test_dump_round_trips_through_load(tmp_path):
+    project = Project(name="p", description="desc", email="e@example.com")
+    path = tmp_path / PROJECT_FILE
+    project.save(path)
+    assert Project.load(path) == project
+
+
+def test_dump_omits_unset_optionals(tmp_path):
+    # TOML has no null: absent is the only way to spell "unset"
+    text = Project(name="p").dump()
+    assert "description" not in text and "email" not in text
+
+
+def test_dump_escapes_quotes_in_values(tmp_path):
+    project = Project(name='odd "quoted" name')
+    path = tmp_path / PROJECT_FILE
+    project.save(path)
+    assert Project.load(path).name == 'odd "quoted" name'

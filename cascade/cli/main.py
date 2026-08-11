@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from cascade.cli import author, store
+from cascade.cli import author, new, store
 from cascade.cli.errors import CliError
 
 
@@ -19,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Declarative, typed, container-native ML pipelines.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    new.add_parsers(sub)
     author.add_parsers(sub)
     store.add_parsers(sub)
     return parser

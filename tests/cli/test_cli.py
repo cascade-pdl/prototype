@@ -15,8 +15,12 @@ import pytest
 from yaml import safe_load
 
 from cascade.cli.main import main
+from cascade.deployment import Deployment
 from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import compile_pipeline
+from cascade.project import Project, find_project
+
+from yaml import safe_load
 
 
 def test_declared_entry_point_is_importable():
@@ -185,3 +189,117 @@ def test_fetch_missing_key_is_a_clean_error(project, monkeypatch, capsys):
     monkeypatch.chdir(project)
     assert main(["store", "fetch", "absent", str(project / "x")]) == 2
     assert "not found" in capsys.readouterr().err
+
+
+def test_new_creates_the_three_project_files(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert main(["new", "demo", "--yes"]) == 0
+    root = tmp_path / "demo"
+    assert (root / "cascade.toml").is_file()
+    assert (root / "pipeline.yaml").is_file()
+    assert (root / "deployment.yaml").is_file()
+
+
+def test_scaffolded_files_load_through_their_real_loaders(tmp_path, monkeypatch, capsys):
+    """The templates are hand-written text, so their loadability is asserted, not
+    assumed."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["new", "demo", "--yes"]) == 0
+    root = tmp_path / "demo"
+ 
+    project, resolved = find_project(root)
+    assert project.name == "demo"
+    assert resolved == root
+ 
+    deployment = Deployment.load(project.deployment_file(root))
+    assert deployment.store.root == "./_store"
+ 
+    pipeline = Pipeline.decode(safe_load((root / "pipeline.yaml").read_text()))
+    assert pipeline.entrypoint == "main"
+    assert pipeline.refs == [] and pipeline.dags == []
+
+
+ 
+def test_new_records_metadata_when_supplied(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert main(["new", "demo", "--description", "Moth work",
+                 "--email", "l@example.com", "--yes"]) == 0
+    project = Project.load(tmp_path / "demo" / "cascade.toml")
+    assert project.description == "Moth work"
+    assert project.email == "l@example.com"
+
+
+def test_unsupplied_metadata_is_omitted_not_empty(tmp_path, monkeypatch, capsys):
+    """TOML has no null, so unset fields must be absent from the file."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["new", "demo", "--yes"]) == 0
+    text = (tmp_path / "demo" / "cascade.toml").read_text()
+    assert "description" not in text
+    assert "email" not in text
+    assert Project.load(tmp_path / "demo" / "cascade.toml").description is None
+
+
+def test_new_accepts_an_explicit_target_path(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "nested" / "here"
+    assert main(["new", "demo", str(target), "--yes"]) == 0
+    assert (target / "cascade.toml").is_file()
+
+ 
+def test_new_accepts_an_existing_empty_directory(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "empty"
+    target.mkdir()
+    assert main(["new", "demo", str(target), "--yes"]) == 0
+    assert (target / "cascade.toml").is_file()
+ 
+ 
+def test_new_refuses_a_non_empty_directory(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "occupied"
+    target.mkdir()
+    (target / "keep.txt").write_text("mine")
+    assert main(["new", "demo", str(target), "--yes"]) == 2
+    assert "not empty" in capsys.readouterr().err
+    assert (target / "keep.txt").read_text() == "mine"  # nothing clobbered
+
+ 
+def test_new_refuses_a_file_target(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "afile"
+    target.write_text("x")
+    assert main(["new", "demo", str(target), "--yes"]) == 2
+    assert "not a directory" in capsys.readouterr().err
+
+ 
+def test_new_rejects_an_empty_name(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert main(["new", "  ", "--yes"]) == 2
+    assert "must not be empty" in capsys.readouterr().err
+
+ 
+def test_store_commands_work_against_a_fresh_scaffold(tmp_path, monkeypatch, capsys):
+    """The scaffolded deployment is immediately usable — no editing required."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["new", "demo", "--yes"]) == 0
+    capsys.readouterr()
+ 
+    root = tmp_path / "demo"
+    monkeypatch.chdir(root)
+    src = tmp_path / "sample.txt"
+    src.write_text("hello")
+ 
+    assert main(["store", "stage", "sample.txt", str(src)]) == 0
+    capsys.readouterr()
+    assert main(["store", "list"]) == 0
+    assert "sample.txt" in capsys.readouterr().out
+
+ 
+def test_scaffolded_pipeline_validates_with_an_actionable_finding(tmp_path, monkeypatch, capsys):
+    """A skeleton is intentionally incomplete: validate should say so clearly
+    (exit 1, a finding — not a crash)."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["new", "demo", "--yes"]) == 0
+    capsys.readouterr()
+    assert main(["validate", str(tmp_path / "demo" / "pipeline.yaml")]) == 1
+    assert "entrypoint" in capsys.readouterr().out

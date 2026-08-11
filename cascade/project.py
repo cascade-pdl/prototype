@@ -16,6 +16,7 @@ to persist it via a writer of their choice.
 """
 from __future__ import annotations
 
+import json
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,18 +38,25 @@ class Project:
     name: str
     pipeline: str = "pipeline.yaml"
     deployment: str = "deployment.yaml"
+    description: str | None = None
+    email: str | None = None
 
     def encode(self) -> dict[str, Any]:
-        """A TOML-serialisable dict under a ``[project]`` table. (Kept as a dict
-        rather than a string: ``tomllib`` is read-only, so writing is the
-        caller's choice of writer — e.g. ``tomli_w.dump(project.encode(), f)``.)"""
-        return {
-            "project": {
-                "name": self.name,
-                "pipeline": self.pipeline,
-                "deployment": self.deployment,
-            }
+        """A TOML-serialisable dict under a ``[project]`` table.
+
+        Unset optional fields are **omitted**, not written as empty: TOML has no
+        null, so there is no way to spell "present but unset".
+        """
+        table: dict[str, Any] = {
+            "name": self.name,
+            "pipeline": self.pipeline,
+            "deployment": self.deployment,
         }
+        if self.description is not None:
+            table["description"] = self.description
+        if self.email is not None:
+            table["email"] = self.email
+        return {"project": table}
 
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> Self:
@@ -58,6 +66,8 @@ class Project:
             name=proj["name"],
             pipeline=proj.get("pipeline", "pipeline.yaml"),
             deployment=proj.get("deployment", "deployment.yaml"),
+            description=proj.get("description"),
+            email=proj.get("email"),
         )
 
     @classmethod
@@ -65,6 +75,20 @@ class Project:
         with open(path, "rb") as f:  # tomllib requires binary mode
             raw = tomllib.load(f)
         return cls.decode(raw)
+
+    def dump(self) -> str:
+        """Serialise to TOML text.
+
+        Hand-written rather than via a writer dependency: the file is a single
+        flat table of strings. ``json.dumps`` supplies the quoting — JSON string
+        escaping is a valid subset of TOML's basic-string escaping.
+        """
+        lines = ["[project]"]
+        lines += [f"{k} = {json.dumps(v)}" for k, v in self.encode()["project"].items()]
+        return "\n".join(lines) + "\n"
+
+    def save(self, path: Path | str) -> None:
+        Path(path).write_text(self.dump())
 
     def pipeline_file(self, root: Path | str) -> Path:
         """Resolve the pipeline path against the project root."""
