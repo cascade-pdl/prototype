@@ -28,19 +28,6 @@ class RunnerOverrides(ABC):
 
 
 @dataclass
-class SubprocessOverride(RunnerOverrides):
-    memory: int | None = None
-    cpu: int | None = None
-
-    @classmethod
-    def decode(cls, raw: dict[str, Any]) -> Self:
-        return cls(memory=raw.get("memory"), cpu=raw.get("cpu"))
-
-    def encode(self) -> dict[str, Any]:
-        return {"memory": self.memory, "cpu": self.cpu}
-
-
-@dataclass
 class DockerOverride(RunnerOverrides):
     no_pull: bool | None = None
     memory: int | None = None
@@ -60,7 +47,6 @@ class DockerOverride(RunnerOverrides):
 
 RUNNER_OVERRIDES: Mapping[RunnerKind, Type[RunnerOverrides]] = {
     RunnerKind.docker: DockerOverride,
-    RunnerKind.subprocess: SubprocessOverride,
 }
 
 

@@ -8,7 +8,7 @@ from asyncio.subprocess import Process
 from cascade.engine.runner.runner import Runner
 from cascade.engine.runner.run_status import RunStatus
 from cascade.engine.runner.run_spec import RunSpec, to_env
-from cascade.engine.runner.runner_coro import HandleCoro, RunnerCoro
+from cascade.engine.runner.runner_coro import HandleCoro
 
 
 class HandleSubprocess(HandleCoro):
@@ -18,8 +18,7 @@ class HandleSubprocess(HandleCoro):
 
 
 class RunnerSubprocess(Runner):
-    def __init__(self, cmd: list[str], memory: int | None = None):
-        self.memory = memory
+    def __init__(self, cmd: list[str]):
         self.cmd = cmd
 
     async def spawn(self, spec: RunSpec):

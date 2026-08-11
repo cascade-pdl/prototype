@@ -1,11 +1,11 @@
 import pytest
 
-from cascade.engine.runner.runner_coro import RunnerCoro, HandleCoro
+from cascade.engine.runner.runner_coro import RunnerAwaitable
 from cascade.engine.runner.run_spec import RunSpec
 
 
 @pytest.mark.asyncio
-async def test_runner_coro():
+async def test_runner_awaitable():
 
     async def testme():
         import asyncio
@@ -13,7 +13,7 @@ async def test_runner_coro():
         await asyncio.sleep(0.1)
         return "done!"
 
-    runner = RunnerCoro(coro=testme)
+    runner = RunnerAwaitable(coro=testme)
     handle = await runner.spawn(
         spec=RunSpec(
             name="testme",

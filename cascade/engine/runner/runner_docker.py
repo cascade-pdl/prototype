@@ -19,12 +19,16 @@ class RunnerDocker(Runner):
         extra_args: list[str] | None = None,
         map_current_user: bool = True,
         aws_credentials_dir: str | None = None,
+        memory: int | None = None,
+        cpu: int | None = None,
     ):
         self.image = image
         self.no_pull = no_pull
         self.extra_args = extra_args or []
         self.map_current_user = map_current_user
         self.aws_credentials_dir = aws_credentials_dir
+        self.memory = memory
+        self.cpu = cpu
 
     def _build_cmd(self, spec) -> list[str]:
         home = "/root"
@@ -39,6 +43,13 @@ class RunnerDocker(Runner):
             host_aws = os.path.abspath(os.path.expanduser(self.aws_credentials_dir))
             cont_aws = os.path.join(home, ".aws")
             cmd += ["-v", f"{host_aws}:{cont_aws}:ro"]
+        # resource limits, when the deployment or ref asked for them. NOTE: the
+        # model does not specify units for `cpu` -- read here as whole CPUs, which
+        # will need reconciling with ECS (where 1024 == 1 vCPU) in phase 5.
+        if self.memory is not None:
+            cmd += ["--memory", f"{self.memory}m"]
+        if self.cpu is not None:
+            cmd += ["--cpus", str(self.cpu)]
         env["HOME"] = home
         for k, v in env.items():
             cmd += ["-e", f"{k}={v}"]
