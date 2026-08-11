@@ -20,8 +20,6 @@ from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import compile_pipeline
 from cascade.project import Project, find_project
 
-from yaml import safe_load
-
 
 def test_declared_entry_point_is_importable():
     # mirrors pyproject.toml's `cascade = "cascade.cli:main"`
