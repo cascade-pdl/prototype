@@ -14,96 +14,24 @@ next disappearance is a red bar, not a gap found later at execution time.
 from dataclasses import replace
 
 import pytest
-from yaml import safe_load
-
 from cascade.model.pipeline import Pipeline
 from cascade.model.dependency import Dependency
-from cascade.plan.compile import compile_pipeline, check
+from cascade.plan.compile import check
 from cascade.plan.plan import Plan, PLAN_VERSION, PlanVersionError
 from cascade.plan.slice import slice_plan
 from cascade.plan.integrity import check_plan_integrity
 
 
-PIPELINE = """
-entrypoint: main
-
-types:
-  structures:
-    - name: BBox
-      fields:
-        - { name: x, type: "float" }
-        - { name: y, type: "float" }
-        - { name: w, type: "float" }
-        - { name: h, type: "float" }
-    - name: Detection
-      fields:
-        - { name: bbox,       type: "BBox" }
-        - { name: label,      type: "string" }
-        - { name: confidence, type: "float" }
-    - name: Score
-      extends: Detection                              # structural single-inheritance
-      fields:
-        - { name: species, type: "string" }
-        - { name: score,   type: "float" }
-
-input:
-  - { name: image, type: "io.Image" }
-
-refs:
-  - name: detect
-    runner: docker
-    config: { image: "123.dkr.ecr.eu-west-1.amazonaws.com/flat-bug:v3" }
-    input:  [ { name: image, type: "io.Image" } ]
-    output: [ { name: dets,  type: "Detection[]" } ]
-  - name: score
-    runner: subprocess
-    config: { cmd: ["python", "-m", "score"] }
-    input:  [ { name: d, type: "Detection" } ]
-    output:
-      - { name: s, type: "Score", config: { encoding: "csv" } }
-
-dags:
-  - name: analyse
-    input: [ { name: dets, type: "Detection[]" } ]
-    nodes:
-      - name: each
-        runs: score
-        scatter: d
-        depends_on: [ { node: "$input", field: dets, as: d } ]
-    output: [ { node: each, field: s, as: scores, mode: gather } ]
-  - name: main
-    input: [ { name: image, type: "io.Image" } ]
-    nodes:
-      - name: d
-        runs: detect
-        depends_on: [ { node: "$input", field: image, as: image } ]
-      - name: a
-        runs: analyse
-        depends_on: [ { node: d, field: dets, as: dets } ]
-    output: [ { node: a, field: scores, as: scores } ]
-"""
-
-
-@pytest.fixture
-def pipe() -> Pipeline:
-    return Pipeline.decode(safe_load(PIPELINE))
-
-
-@pytest.fixture
-def plan(pipe: Pipeline) -> Plan:
-    return compile_pipeline(pipe)
-
-
 # --- decode -----------------------------------------------------------------
 
-def test_decode_reads_refs_dags_and_types(pipe: Pipeline):
-    assert {r.name for r in pipe.refs} == {"detect", "score"}
-    assert {d.name for d in pipe.dags} == {"analyse", "main"}
-    assert pipe.types
+def test_decode_reads_refs_dags_and_types(pipeline: Pipeline):
+    assert {r.name for r in pipeline.refs} == {"detect", "score"}
+    assert {d.name for d in pipeline.dags} == {"analyse", "main"}
+    assert pipeline.types
 
 
-def test_compile_accepts_the_pipeline(pipe: Pipeline):
-    assert check(pipe) == []
+def test_compile_accepts_the_pipeline(pipeline: Pipeline):
+    assert check(pipeline=pipeline) == []
 
 
 # --- dag_outputs ------------------------------------------------------------
