@@ -1,4 +1,4 @@
-"""``cascade.engine.runner.run_spec`` — the spec and its env projection.
+"""``cascade.engine.run_spec`` — the spec and its env projection.
 
 The env projection is the container wire format, so the tests assert on the exact
 variables emitted and on the reader/writer store asymmetry that makes containment

@@ -2,8 +2,10 @@
 
 The spec carries four kinds of thing: *identity* (run, node, instance), *stores*,
 *input bindings*, and *args*. There is no output binding: output ports live in the
-plan's ``Signature`` and their location is already fixed by ``store_out``'s scope. The env projection is the wire format for containers; an
-in-process runner reads the spec directly instead.
+plan's ``Signature`` and their location is already fixed by ``store_out``'s scope.
+
+The env projection is the wire format for containers; an in-process runner reads the
+spec directly instead.
 
 **Two stores, not one.** ``store_in`` is scoped to the parent dag, so an instance
 can read its siblings' outputs without anything being copied; ``store_out`` is
