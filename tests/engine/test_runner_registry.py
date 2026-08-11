@@ -13,6 +13,8 @@ from cascade.model.ref_data import RefDocker, RefEcho, RefSubprocess
 from cascade.model.runner_overrides import DockerOverride, RunnerOverrides
 from cascade.plan.run_config import RunConfig
 from cascade.engine.run_spec import RunSpec
+from cascade.plan.signature import Signature, TypeExpr
+from cascade.store.file_store import FileStore, FileConfig
 
 from cascade.engine.runner.registry import (
     RunnerEnv,
@@ -139,3 +141,57 @@ def test_resource_limits_reach_the_docker_command():
     cmd = build_runner(config)._build_cmd(RunSpec(name="n", run_id="r"))
     assert "--memory" in cmd and "2048m" in cmd
     assert "--cpus" in cmd and "2" in cmd
+
+# --- echo's output ports come from the signature -----------------------------
+
+def test_echo_takes_its_output_ports_from_the_signature():
+    """Per-runnable, like the runner itself — nothing here varies per instance."""
+    sig = Signature(
+        inputs={"d": TypeExpr.parse("Detection")},
+        outputs={"scored": TypeExpr.parse("Score"), "log": TypeExpr.parse("string")},
+    )
+    runner = build_runner(
+        RunConfig(runner=RunnerKind.echo, config=RefEcho(message="hi")),
+        signature=sig,
+    )
+    assert runner.outputs == ("scored", "log")
+
+
+def test_echo_without_a_signature_writes_nothing():
+    runner = build_runner(RunConfig(runner=RunnerKind.echo, config=RefEcho()))
+    assert runner.outputs == ()
+
+
+def test_other_kinds_ignore_the_signature():
+    sig = Signature(inputs={}, outputs={"o": TypeExpr.parse("string")})
+    runner = build_runner(
+        RunConfig(runner=RunnerKind.docker, config=RefDocker(image="x:1")),
+        signature=sig,
+    )
+    assert isinstance(runner, RunnerDocker)
+
+
+@pytest.mark.asyncio
+async def test_echo_writes_a_stub_for_each_output_port(tmp_path):
+    """What makes a multi-node dag testable: a downstream node has something to read.
+    Where the stubs land is decided by store_out's scope, not by echo."""
+    store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main", "d")))
+    runner = build_runner(
+        RunConfig(runner=RunnerKind.echo, config=RefEcho(message="detected")),
+        signature=Signature(inputs={}, outputs={"dets": TypeExpr.parse("Detection[]")}),
+    )
+    rc = await runner.run(RunSpec(name="detect", run_id="r1", instance_id="r1/main/d", store_out=store))
+    assert rc == 0
+    written = store.get_json("dets")
+    assert written["port"] == "dets"
+    assert written["echo"] == "detected"
+    assert (tmp_path / "r1" / "main" / "d" / "dets").is_file()
+
+
+@pytest.mark.asyncio
+async def test_echo_is_harmless_without_a_writer_store():
+    runner = build_runner(
+        RunConfig(runner=RunnerKind.echo, config=RefEcho()),
+        signature=Signature(inputs={}, outputs={"o": TypeExpr.parse("string")}),
+    )
+    assert await runner.run(RunSpec(name="n", run_id="r")) == 0

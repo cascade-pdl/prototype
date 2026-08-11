@@ -31,6 +31,7 @@ from cascade.model.runner_kinds import RunnerKind
 from cascade.model.ref_data import RefData, RefDocker, RefEcho, RefSubprocess
 from cascade.model.runner_overrides import RunnerOverrides
 from cascade.plan.run_config import RunConfig
+from cascade.plan.signature import Signature
 
 from cascade.engine.runner.runner import Runner
 from cascade.engine.runner.runner_docker import RunnerDocker
@@ -78,6 +79,7 @@ def _build_docker(
     config: RefData,
     overrides: RunnerOverrides | None,
     env: RunnerEnv,
+    signature: Signature | None = None,
 ) -> Runner:
     assert isinstance(config, RefDocker)
     no_pull = getattr(overrides, "no_pull", None)
@@ -96,6 +98,7 @@ def _build_subprocess(
     config: RefData,
     overrides: RunnerOverrides | None,
     env: RunnerEnv,
+    signature: Signature | None = None,
 ) -> Runner:
     assert isinstance(config, RefSubprocess)
     return RunnerSubprocess(cmd=list(config.cmd))
@@ -105,12 +108,17 @@ def _build_echo(
     config: RefData,
     overrides: RunnerOverrides | None,
     env: RunnerEnv,
+    signature: Signature | None = None,
 ) -> Runner:
     assert isinstance(config, RefEcho)
-    return RunnerEcho(message=config.message)
+    # output ports come from the plan: per-runnable, like the runner itself
+    return RunnerEcho(
+        message=config.message,
+        outputs=tuple(signature.outputs) if signature else (),
+    )
 
 
-Builder = Callable[[RefData, RunnerOverrides | None, RunnerEnv], Runner]
+Builder = Callable[..., Runner]
 
 RUNNER_BUILDERS: Mapping[RunnerKind, Builder] = {
     RunnerKind.docker: _build_docker,
@@ -123,11 +131,15 @@ def build_runner(
     config: RunConfig,
     deployment_overrides: RunnerOverrides | None = None,
     env: RunnerEnv | None = None,
+    signature: Signature | None = None,
 ) -> Runner:
-    """Build the live runner for one ref's ``RunConfig``.
+    """Build the live runner for one runnable.
 
     ``deployment_overrides`` is the deployment's entry for this kind, if any
-    (``deployment.runners.get(config.runner)``).
+    (``deployment.runners.get(config.runner)``). ``signature`` is the runnable's
+    entry in ``plan.signatures``; kinds that need to know their own ports (echo,
+    writing stubs) use it, others ignore it. It is passed here rather than per spawn
+    because a signature is per-runnable, not per-instance.
     """
     try:
         build = RUNNER_BUILDERS[config.runner]
@@ -137,4 +149,5 @@ def build_runner(
         config.config,
         merge_overrides(config.overrides, deployment_overrides),
         env or RunnerEnv(),
+        signature=signature,
     )
