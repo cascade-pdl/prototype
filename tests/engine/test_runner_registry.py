@@ -12,7 +12,7 @@ from cascade.model.runner_kinds import RunnerKind
 from cascade.model.ref_data import RefDocker, RefEcho, RefSubprocess
 from cascade.model.runner_overrides import DockerOverride, RunnerOverrides
 from cascade.plan.run_config import RunConfig
-from cascade.engine.runner.run_spec import RunSpec
+from cascade.engine.run_spec import RunSpec
 
 from cascade.engine.runner.registry import (
     RunnerEnv,

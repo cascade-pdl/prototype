@@ -1,7 +1,7 @@
 import pytest
 
 from cascade.engine.runner.runner_coro import RunnerAwaitable
-from cascade.engine.runner.run_spec import RunSpec
+from cascade.engine.run_spec import RunSpec
 
 
 @pytest.mark.asyncio

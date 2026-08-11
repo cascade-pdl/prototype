@@ -2,7 +2,7 @@ import os
 import asyncio
 
 from cascade.engine.runner.runner import Runner
-from cascade.engine.runner.run_spec import RunSpec, to_env
+from cascade.engine.run_spec import RunSpec, to_env
 from cascade.engine.runner.runner_subprocess import HandleSubprocess
 
 
