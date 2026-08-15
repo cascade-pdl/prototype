@@ -52,7 +52,7 @@ dags:
         runs: score
         scatter: d
         depends_on: [ { node: "$input", field: dets, as: d } ]
-    output: [ { node: each, field: s, as: scores, mode: gather } ]
+    output: [ { node: each, field: s, as: scores } ]
   - name: main
     input: [ { name: image, type: "io.Image" } ]
     nodes:

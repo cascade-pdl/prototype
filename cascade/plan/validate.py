@@ -20,7 +20,7 @@ from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
 from cascade.plan.signature import Signature, TypeExpr
 from cascade.plan.type_env import TypeEnv
-from cascade.plan.elaborate import _NodeInfo, _node_fans_out, resolve_edge
+from cascade.plan.elaborate import _NodeInfo, resolve_edge
 
 
 def validate_edges(
@@ -43,13 +43,13 @@ def validate_edges(
             node = graph.node(node_name)
             info[node.name] = _NodeInfo(
                 sig=signatures[node.runnable_name],
-                fan=_node_fans_out(node, info),
+                fan=node.scatter is not None,
             )
 
         for node in dag.nodes:
             node_sig = signatures[node.runnable_name]
             for dep in node.depends_on:
-                supplied, _fan = resolve_edge(dep, info, dag_inputs)
+                supplied = resolve_edge(dep, info, dag_inputs)
                 port = dep.as_ or dep.field
                 if port is None:
                     if len(node_sig.inputs) == 1:

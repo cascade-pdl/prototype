@@ -72,7 +72,7 @@ def cmd_show(args: argparse.Namespace) -> int:
         node_ids = [nid for nid, _ in graph.nodes()]
         print(f"  {name}  ({len(node_ids)} node(s)): {', '.join(node_ids)}")
         for dep in plan.dag_outputs.get(name, []):
-            print(f"      -> {dep.node}.{dep.field} [{dep.mode}]")
+            print(f"      -> {dep.node}.{dep.field}")
     integrity = check_plan_integrity(plan)
     if integrity:
         print(f"integrity: {len(integrity)} problem(s)")

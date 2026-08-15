@@ -18,3 +18,4 @@ env.default
 _cascade_store/
 _store/
 .vscode/settings.json
+projects/*

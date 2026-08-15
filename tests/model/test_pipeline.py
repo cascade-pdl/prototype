@@ -38,10 +38,12 @@ def test_compile_accepts_the_pipeline(pipeline: Pipeline):
 
 def test_dag_outputs_populated_for_every_dag_with_outputs(plan: Plan):
     assert set(plan.dag_outputs) == {"analyse", "main"}
-    (gather,) = plan.dag_outputs["analyse"]
-    (single,) = plan.dag_outputs["main"]
-    assert (gather.node, gather.field, gather.mode) == ("each", "s", "gather")
-    assert (single.node, single.field, single.mode) == ("a", "scores", "single")
+    (from_fan,) = plan.dag_outputs["analyse"]
+    (plain,) = plan.dag_outputs["main"]
+    # no mode: 'analyse' exports a scattered node, so the gather is implied by
+    # 'each' declaring scatter -- the edge itself has no choice to make
+    assert (from_fan.node, from_fan.field) == ("each", "s")
+    assert (plain.node, plain.field) == ("a", "scores")
 
 
 def test_plan_is_version(plan: Plan):
@@ -51,7 +53,7 @@ def test_plan_is_version(plan: Plan):
 def test_dag_outputs_round_trips(plan: Plan):
     wire = plan.encode()
     assert "dag_outputs" in wire, "dag_outputs dropped from encode()"
-    assert wire["version"] == 2
+    assert wire["version"] == 3
     assert Plan.decode(wire) == plan
 
 

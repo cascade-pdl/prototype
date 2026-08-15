@@ -3,8 +3,16 @@
 Functions over data, not a stateful object: the derived signatures are what cross
 the boundary, the deriving behaviour stays here. Takes the graphs already built by
 `build` (no rebuild). Derivation does *shape and arity* only — it can still fail on
-missing output fields, an ungathered fan at a dag boundary, or scatter over a
-non-collection. Type *identity* (is-a) is a separate pass (plan.validate).
+missing output fields or scatter over a non-collection. Type *identity* (is-a) is a
+separate pass (plan.validate).
+
+**Fan is one node deep.** It opens where a node declares ``scatter`` and closes at
+that same node's boundary, where the fan runner gathers the lanes. So a node fans iff
+``node.scatter is not None`` — a local property, read directly rather than propagated
+along edges — and every edge obeys one rule: a fanned producer delivers one more array
+level than it declares, an ordinary producer delivers what it declares. There is no
+open fan to track, so there is no fan status to compute, and an unclosed fan at a dag
+boundary is unrepresentable rather than merely rejected.
 """
 from __future__ import annotations
 
@@ -26,7 +34,7 @@ class ElaborationError(Exception):
 @dataclass
 class _NodeInfo:
     sig: Signature
-    fan: bool
+    fan: bool  # node.scatter is not None -- read, never propagated
 
 
 def elaborate(
@@ -63,32 +71,30 @@ def _from_dag(dag: Dag, graph: Graph[DagNode, Dependency], sigs: dict[str, Signa
         node = graph.node(node_name)
         info[node.name] = _NodeInfo(
             sig=sigs[node.runnable_name],  # already resolved (call-graph order)
-            fan=_node_fans_out(node, info),
+            fan=node.scatter is not None,
         )
         _check_scatter(node, info, dag_inputs)
 
     outputs: dict[str, TypeExpr] = {}
     for dep in dag.output:
-        t, unclosed_fan = resolve_edge(dep, info, dag_inputs)
-        if unclosed_fan:
-            raise ElaborationError(
-                f"dag {dag.name!r} exports {dep.node}.{dep.field} from a fanned-out "
-                f"node without 'gather' — fan dimension undefined at the boundary"
-            )
-        outputs[dep.as_ or dep.field or dep.node] = t
+        outputs[dep.as_ or dep.field or dep.node] = resolve_edge(dep, info, dag_inputs)
 
     return Signature(inputs=dag_inputs, outputs=outputs)
 
 
 def resolve_edge(
     dep: Dependency, info: dict[str, _NodeInfo], dag_inputs: dict[str, TypeExpr]
-) -> tuple[TypeExpr, bool]:
-    """Type and fan-status flowing along one edge. gather -> +1 array level, fan
-    closed; single -> element pass-through, inherits any open upstream fan."""
+) -> TypeExpr:
+    """The type flowing along one edge.
+
+    One rule, no choices: a fanned producer's output is gathered at its own boundary,
+    so it arrives one array level deeper than declared; anything else arrives as
+    declared.
+    """
     if dep.is_input:
         if dep.field not in dag_inputs:
             raise ElaborationError(f"$input has no field {dep.field!r}")
-        return dag_inputs[dep.field], False
+        return dag_inputs[dep.field]
 
     up = info.get(dep.node)
     if up is None:
@@ -103,23 +109,7 @@ def resolve_edge(
     if field not in up.sig.outputs:
         raise ElaborationError(f"node {dep.node!r} has no output {field!r}")
     t = up.sig.outputs[field]
-
-    if dep.mode == "gather":
-        return t.as_collection(), False
-    if dep.mode == "single":
-        return t, up.fan
-    raise ElaborationError(f"unknown dependency mode {dep.mode!r}")
-
-
-def _node_fans_out(node: DagNode, info: dict[str, _NodeInfo]) -> bool:
-    if node.scatter is not None:
-        return True
-    for dep in node.depends_on:
-        if dep.mode == "single" and not dep.is_input:
-            up = info.get(dep.node)
-            if up is not None and up.fan:
-                return True
-    return False
+    return t.as_collection() if up.fan else t
 
 
 def _check_scatter(node: DagNode, info: dict[str, _NodeInfo], dag_inputs: dict[str, TypeExpr]) -> None:
@@ -127,7 +117,7 @@ def _check_scatter(node: DagNode, info: dict[str, _NodeInfo], dag_inputs: dict[s
         return
     for dep in node.depends_on:
         if (dep.as_ or dep.field) == node.scatter:
-            t, _ = resolve_edge(dep, info, dag_inputs)
+            t = resolve_edge(dep, info, dag_inputs)
             if t.depth < 1:
                 raise ElaborationError(
                     f"node {node.name!r} scatters over {node.scatter!r}, "

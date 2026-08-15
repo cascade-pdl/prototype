@@ -14,7 +14,13 @@ class DagNode:
     ``runs`` names the runnable this node executes — a ref *or* a dag (they are
     interchangeable by name), defaulting to the node's own name. It is not
     restricted to refs, which is why the field is ``runs`` and not ``ref``.
-    ``scatter`` names an input port to fan out over (one instance per item).
+    ``scatter`` names an input port to fan out over: the node runs once per element
+    and the fan runner gathers the results at this node's boundary, so consumers see
+    one collection and never a fan. Whatever ``runs`` names — a ref or a whole dag —
+    is fanned opaquely, which is how multi-stage per-element work is expressed.
+
+    ``merge`` is that gather's policy, and lives here rather than on the consuming
+    edge because the gather happens once, at this node.
     ``args`` are static kwargs.
     """
 
@@ -22,6 +28,7 @@ class DagNode:
     runs: str | None = None
     args: dict[str, Any] = field(default_factory=dict)
     scatter: str | None = None
+    merge: str = "concat"  # concat | dict | latest; only meaningful with scatter
     depends_on: list[Dependency] = field(default_factory=list)
 
     @property
@@ -35,6 +42,7 @@ class DagNode:
             runs=raw.get("runs"),
             args=dict(raw.get("args", {})),
             scatter=raw.get("scatter"),
+            merge=raw.get("merge", "concat"),
             depends_on=[Dependency.decode(d) for d in raw.get("depends_on", [])],
         )
 
@@ -44,5 +52,6 @@ class DagNode:
             "runs": self.runs,
             "args": dict(self.args),
             "scatter": self.scatter,
+            "merge": self.merge,
             "depends_on": [d.encode() for d in self.depends_on],
         }

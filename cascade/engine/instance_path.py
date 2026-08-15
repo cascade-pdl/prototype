@@ -28,6 +28,14 @@ class InstancePath:
         collide in the store."""
         return cls((run_id,))
 
+    @classmethod
+    def parse(cls, rendered: str) -> "InstancePath":
+        """Inverse of ``str()``. Exact, because segments cannot contain ``/`` —
+        which is what lets a ``RunSpec`` be self-describing: a runner recovers its
+        own path from ``instance_id`` without being told it separately, and that is
+        what a remote dag runner will need when all it receives is the spec."""
+        return cls(tuple(s for s in rendered.split("/") if s))
+
     def child(self, *names: str) -> "InstancePath":
         """Descend by one or more named segments (a dag, or a node within it)."""
         for name in names:

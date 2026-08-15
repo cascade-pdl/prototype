@@ -79,7 +79,7 @@ def test_compile_writes_a_plan(project, tmp_path):
     out = tmp_path / "out.plan.json"
     assert main(["compile", str(project / "pipeline.yaml"), "-o", str(out)]) == 0
     raw = json.loads(out.read_text())
-    assert raw["version"] == 2
+    assert raw["version"] == 3
     assert raw["dag_outputs"], "compiled plan lost dag_outputs"
 
 
@@ -92,7 +92,7 @@ def test_show_summarises_dag_outputs(plan_file, capsys):
     assert main(["show", str(plan_file)]) == 0
     out = capsys.readouterr().out
     assert "entrypoint: main" in out
-    assert "each.s [gather]" in out
+    assert "each.s" in out
     assert "integrity: ok" in out
 
 

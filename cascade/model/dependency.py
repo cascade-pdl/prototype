@@ -6,13 +6,23 @@ from typing import Any, Self
 
 @dataclass
 class Dependency:
-    """One incoming edge of a dag node."""
+    """One incoming edge of a dag node.
+
+    There is no ``mode``. A fan is exactly one node deep — it opens at a node's
+    ``scatter`` and closes at that same node's boundary, where the fan runner gathers
+    the lanes — so an edge never has a choice to make: consuming a fanned node always
+    yields the gathered collection, consuming an ordinary node yields its output as
+    declared. Multi-stage per-element work is expressed by wrapping those stages in a
+    subdag and scattering *that*, which states the boundary explicitly instead of
+    letting a fan propagate silently across edges.
+
+    ``merge`` moved to ``DagNode`` for the same reason: gathering happens once, at the
+    producing node, so the policy belongs to the producer rather than to each consumer.
+    """
 
     node: str
     field: str | None = None
     as_: str | None = None
-    mode: str = "single"  # single | gather
-    merge: str = "concat"  # concat | dict | latest
 
     @property
     def is_input(self) -> bool:
@@ -25,8 +35,6 @@ class Dependency:
             node=raw["node"],
             field=raw.get("field"),
             as_=raw.get("as"),  # 'as' is a keyword; stored as as_
-            mode=raw.get("mode", "single"),
-            merge=raw.get("merge", "concat"),
         )
 
     def encode(self) -> dict[str, Any]:
@@ -34,6 +42,4 @@ class Dependency:
             "node": self.node,
             "field": self.field,
             "as": self.as_,
-            "mode": self.mode,
-            "merge": self.merge,
         }

@@ -3,7 +3,7 @@
 A ``Runner`` implements one atom, ``spawn``, returning a ``Handle``; the
 spawn-then-poll loop is written once in ``Runner.run``. Kinds differ only in what
 they spawn — a container, a subprocess, or an in-process coroutine — which is what
-lets a dag or a fanned region be substituted for a ref without the caller caring.
+lets a dag or a fanned node be substituted for a ref without the caller caring.
 """
 from cascade.engine.runner.runner import Runner
 from cascade.engine.runner.handle import Handle
@@ -20,6 +20,7 @@ from cascade.engine.runner.runner_docker import RunnerDocker, HandleDocker
 from cascade.engine.runner.registry import RunnerEnv, build_runner, merge_overrides
 from cascade.engine.binding import InputBinding, InputBindings
 from cascade.engine.instance_path import InstancePath
+from cascade.engine.runner.runner_dag import DagRunner, DagRunError
 
 __all__ = [
     "Runner",
@@ -40,4 +41,6 @@ __all__ = [
     "InputBinding",
     "InputBindings",
     "InstancePath",
+    "DagRunner",
+    "DagRunError",
 ]
