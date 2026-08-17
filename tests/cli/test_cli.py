@@ -301,3 +301,79 @@ def test_scaffolded_pipeline_validates_with_an_actionable_finding(tmp_path, monk
     capsys.readouterr()
     assert main(["validate", str(tmp_path / "demo" / "pipeline.yaml")]) == 1
     assert "entrypoint" in capsys.readouterr().out
+
+# --- run ---------------------------------------------------------------------
+
+ECHO_PIPELINE = """
+entrypoint: main
+input: [ { name: src, type: string } ]
+types:
+  structures:
+    - name: Item
+      fields: [ { name: k, type: string } ]
+refs:
+  - name: load
+    runner: echo
+    config: {}
+    input:  [ { name: src,   type: string } ]
+    output: [ { name: items, type: "Item[]" } ]
+dags:
+  - name: main
+    input: [ { name: src, type: string } ]
+    nodes:
+      - name: load
+        runs: load
+        depends_on: [ { node: "$input", field: src, as: src } ]
+    output: [ { node: load, field: items, as: items } ]
+"""
+
+
+@pytest.fixture
+def echo_project(project):
+    """The scaffolded project, with an echo-only pipeline: `run` then needs no docker."""
+    (project / "pipeline.yaml").write_text(ECHO_PIPELINE)
+    return project
+
+
+def test_run_executes_a_pipeline_in_a_project(echo_project, monkeypatch, capsys):
+    """The whole loop: scaffolded project, deployment-resolved store, real execution."""
+    monkeypatch.chdir(echo_project)
+    assert main(["run", "pipeline.yaml", "--input", 'src="moths.jpg"', "--run-id", "r1"]) == 0
+    out = capsys.readouterr().out
+    assert "run r1 complete" in out
+    assert "items" in out  # the declared output port
+    # under the deployment's base scope: the substrate decides where, not the run
+    run = echo_project / "_store" / "wilder" / "moth" / "r1"
+    assert (run / "plan").is_file()
+    assert (run / "main" / "load" / "items").is_file()
+    assert (run / "main" / "$in" / "src").is_file()
+
+
+def test_run_accepts_a_compiled_plan(echo_project, monkeypatch, capsys):
+    monkeypatch.chdir(echo_project)
+    assert main(["compile", "pipeline.yaml", "-o", "p.json"]) == 0
+    capsys.readouterr()
+    assert main(["run", "p.json", "--input", 'src="x"', "--run-id", "r2"]) == 0
+    assert "run r2 complete" in capsys.readouterr().out
+
+
+def test_run_reports_a_missing_input(echo_project, monkeypatch, capsys):
+    monkeypatch.chdir(echo_project)
+    assert main(["run", "pipeline.yaml", "--run-id", "r3"]) == 2
+    assert "missing input" in capsys.readouterr().err
+
+
+def test_run_rejects_a_malformed_input_flag(echo_project, monkeypatch, capsys):
+    monkeypatch.chdir(echo_project)
+    assert main(["run", "pipeline.yaml", "--input", "nonsense"]) == 2
+    assert "name=json-value" in capsys.readouterr().err
+
+
+def test_run_outside_a_project_is_a_hard_error(
+    echo_project, tmp_path_factory, monkeypatch, capsys
+):
+    """Isolated dir, not one nested inside the project -- the walk would find it."""
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    monkeypatch.chdir(elsewhere)
+    assert main(["run", str(echo_project / "pipeline.yaml"), "--input", 'src="x"']) == 2
+    assert "not inside a cascade project" in capsys.readouterr().err
