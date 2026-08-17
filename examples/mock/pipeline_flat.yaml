@@ -1,0 +1,37 @@
+# The same two refs without the fan: detect takes the whole int[] in one call.
+# Runs today, and exercises the full subprocess + local store path end to end.
+entrypoint: main
+
+types:
+  structures:
+    - name: Detection
+      fields:
+        - { name: number, type: "int" }
+        - { name: score,  type: "float" }
+
+input: []
+
+refs:
+  - name: source
+    runner: subprocess
+    config: { cmd: ["python", "examples/mock/mock_source.py"] }
+    input: []
+    output: [ { name: numbers, type: "int[]" } ]
+
+  - name: detect
+    runner: subprocess
+    config: { cmd: ["python", "examples/mock/mock_detect.py"] }
+    input:  [ { name: numbers,    type: "int[]" } ]
+    output: [ { name: detections, type: "Detection[]" } ]
+
+dags:
+  - name: main
+    input: []
+    nodes:
+      - name: src
+        runs: source
+        args: { count: 10 }
+      - name: det
+        runs: detect
+        depends_on: [ { node: src, field: numbers, as: numbers } ]
+    output: [ { node: det, field: detections, as: detections } ]

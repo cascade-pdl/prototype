@@ -1,0 +1,41 @@
+# The scattered pipeline: source emits int[], detect fans out over the integers.
+#
+# This is the target shape and it does NOT run yet: the fan width is a property of
+# the stored collection, so resolution raises FanWidthUnknown until items 1.5, 1.6
+# and 2.4 exist. Kept as the reference case.
+entrypoint: main
+
+types:
+  structures:
+    - name: Detection
+      fields:
+        - { name: number, type: "int" }
+        - { name: score,  type: "float" }
+
+input: []
+
+refs:
+  - name: source
+    runner: subprocess
+    config: { cmd: ["python", "examples/mock/mock_source.py"] }
+    input: []
+    output: [ { name: numbers, type: "int[]" } ]
+
+  - name: detect
+    runner: subprocess
+    config: { cmd: ["python", "examples/mock/mock_detect.py"] }
+    input:  [ { name: number,     type: "int" } ]
+    output: [ { name: detections, type: "Detection[]" } ]
+
+dags:
+  - name: main
+    input: []
+    nodes:
+      - name: src
+        runs: source
+        args: { count: 10 }
+      - name: det
+        runs: detect
+        scatter: number
+        depends_on: [ { node: src, field: numbers, as: number } ]
+    output: [ { node: det, field: detections, as: detections } ]
