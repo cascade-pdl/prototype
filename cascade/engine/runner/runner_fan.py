@@ -5,10 +5,12 @@ runs it once per element of the scattered input. That is why per-element *pipeli
 need no new machinery: wrap the stages in a subdag and scatter that, and
 ``FanRunner(DagRunner(...))`` fans it opaquely.
 
-**The fan closes here.** Lanes write into ``<node>/<i>/`` and this runner then writes
-the gathered collection at the node's *own* scope, under the output port's name. So
-downstream sees exactly what it would see from an unfanned node — one artifact at the
-producer's scope — which is why nothing else in the engine knows fans exist.
+**The fan closes here.** Lanes write into ``<node>/<i>/`` and this runner then writes a
+collection descriptor at the node's *own* scope, under the output port's name. So
+downstream sees exactly what it would see from an unfanned node — one key at the
+producer's scope, resolved by ``store.read`` — which is why nothing else in the engine
+knows fans exist. Nothing is copied: gathering costs one small object however large the
+elements are.
 
 **The one place a slice is materialised.** A scatter element does not exist as an
 addressable artifact until someone creates it: the upstream wrote *a collection*, not
@@ -25,10 +27,9 @@ global scheduling is deliberately out of scope.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Mapping
+from typing import Awaitable, Mapping
 
 from cascade.engine.binding import InputBinding, InputBindings
-from cascade.engine.collection import CollectionDescriptor, read_collection
 from cascade.engine.instance_path import InstancePath
 from cascade.engine.run_spec import RunSpec
 from cascade.engine.runner.runner import Runner
@@ -123,7 +124,7 @@ class FanRunner(RunnerCoroBase):
 
         path = InstancePath.parse(spec.instance_id or spec.run_id)
         binding = self._scatter_binding(spec)
-        elements = read_collection(spec.store_in, binding.key, at=binding.scope)
+        elements = spec.store_in.read_json(binding.key, at=binding.scope)
 
         # stage one element per lane -- the only copy in the system, and the only
         # way a slice becomes addressable
@@ -146,25 +147,20 @@ class FanRunner(RunnerCoroBase):
         return 0
 
     def _gather(self, spec: RunSpec, width: int) -> None:
-        """Close the fan: one artifact per output port, at the node's own scope."""
+        """Close the fan: one artifact per output port, at the node's own scope.
+
+        Written as a **descriptor** — the lanes' outputs stay where they are and the
+        collection is a small object referencing them, so gathering costs the same
+        whether the elements are integers or image crops. A consumer calling
+        ``store.read`` cannot tell the difference, which is the point.
+        """
         if self.merge != "concat":
             raise FanError(
                 f"merge {self.merge!r} is not implemented; only 'concat' matches the "
                 "compiler's arity rule (a gather adds exactly one array level)"
             )
         for port, (inner_scope, inner_key) in self.outputs.items():
-            values: list[Any] = [
-                spec.store_out.get_json(inner_key, at=(str(i), *inner_scope))
-                for i in range(width)
-            ]
-            spec.store_out.put_json(port, values)
-
-    def descriptor_for(self, port: str, width: int) -> CollectionDescriptor:
-        """The distributed form of a gathered port — the zero-copy alternative to
-        ``_gather``, for when elements are too large to concatenate. Not yet used."""
-        inner_scope, inner_key = self.outputs[port]
-        return CollectionDescriptor(
-            count=width,
-            elements=tuple((str(i), *inner_scope) for i in range(width)),
-            key=inner_key,
-        )
+            spec.store_out.write_collection(
+                port,
+                [((str(i), *inner_scope), inner_key) for i in range(width)],
+            )

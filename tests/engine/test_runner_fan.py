@@ -1,71 +1,18 @@
-"""Collections and the fan runner — items 1.5, 1.6, 2.4.
+"""``FanRunner`` — one node, once per element, and the fan closed at its boundary.
 
-The reader is tolerant of both collection shapes, and the fan runner closes the fan
-at the node's own boundary so nothing downstream knows a fan happened.
+The gathered result is a collection *descriptor*: nothing is copied, and a consumer
+calling ``store.read`` cannot tell that from a materialised list. Collection mechanics
+themselves are tested in ``tests/store/test_collection.py``, where they now live.
 """
 import asyncio
 
 import pytest
 
 from cascade.engine.binding import InputBinding, InputBindings
-from cascade.engine.collection import (
-    CollectionDescriptor,
-    CollectionError,
-    collection_width,
-    read_collection,
-)
 from cascade.engine.run_spec import RunSpec
 from cascade.engine.runner.runner_coro import RunnerCoro
 from cascade.engine.runner.runner_fan import FanError, FanRunner
 from cascade.store.file_store import FileConfig, FileStore
-
-
-# --- 1.5 / 1.6: the two shapes ----------------------------------------------
-
-def test_reads_a_monolithic_collection(tmp_path):
-    """For JSON a monolithic collection is already a list once parsed, which is why
-    the codec (1.7) is not on the critical path."""
-    store = FileStore(FileConfig(root=str(tmp_path)))
-    store.put_json("numbers", [0, 1, 2])
-    assert read_collection(store, "numbers") == [0, 1, 2]
-    assert collection_width(store, "numbers") == 3
-
-
-def test_reads_a_distributed_collection(tmp_path):
-    store = FileStore(FileConfig(root=str(tmp_path)))
-    for i, value in enumerate(["a", "b"]):
-        store.put_json("item", value, at=("part", str(i)))
-    descriptor = CollectionDescriptor(
-        count=2, elements=(("part", "0"), ("part", "1")), key="item"
-    )
-    store.put_json("things", descriptor.encode())
-
-    assert read_collection(store, "things") == ["a", "b"]
-    assert collection_width(store, "things") == 2
-
-
-def test_width_of_a_descriptor_does_not_read_the_elements(tmp_path):
-    """The count is in the descriptor, so asking how wide a fan is stays cheap."""
-    store = FileStore(FileConfig(root=str(tmp_path)))
-    store.put_json(
-        "things",
-        CollectionDescriptor(count=500, elements=(("nowhere",),) * 500, key="x").encode(),
-    )
-    assert collection_width(store, "things") == 500  # would raise if it read them
-
-
-def test_descriptor_round_trips():
-    d = CollectionDescriptor(count=2, elements=(("a",), ("b",)), key="k", element_type="Det")
-    assert CollectionDescriptor.decode(d.encode()) == d
-    assert CollectionDescriptor.looks_like(d.encode())
-    assert not CollectionDescriptor.looks_like([1, 2])
-
-
-def test_a_non_collection_is_an_error(tmp_path):
-    store = FileStore(FileConfig(root=str(tmp_path)))
-    store.put_json("scalar", 7)
-    with pytest.raises(CollectionError):
-        read_collection(store, "scalar")
 
 
 # --- 2.4: the fan -----------------------------------------------------------
@@ -101,7 +48,8 @@ async def test_fan_runs_one_lane_per_element_and_gathers(tmp_path):
     assert await runner.run(spec) == 0
 
     # the fan closed: one artifact at the node's own scope, one array level deeper
-    assert writer.get_json("out") == [2, 4, 6]
+    assert writer.read_json("out") == [2, 4, 6]           # resolves the descriptor
+    assert writer.is_collection("out")                # ...which is what was written
     # and each lane kept its own slot
     assert [writer.get_json("out", at=(str(i),)) for i in range(3)] == [2, 4, 6]
 
@@ -122,7 +70,7 @@ async def test_lane_order_is_positional_not_completion_order(tmp_path):
         child=RunnerCoro(coro=slow_for_early_elements), scatter_port="number", outputs={"out": ((), "out")}
     )
     await runner.run(spec)
-    assert writer.get_json("out") == [0, 1, 2, 3, 4]
+    assert writer.read_json("out") == [0, 1, 2, 3, 4]
 
 
 @pytest.mark.asyncio
@@ -143,7 +91,7 @@ async def test_an_empty_collection_fans_zero_lanes(tmp_path):
     assert await FanRunner(
         child=RunnerCoro(coro=_double), scatter_port="number", outputs={"out": ((), "out")}
     ).run(spec) == 0
-    assert writer.get_json("out") == []
+    assert writer.read_json("out") == []
 
 
 @pytest.mark.asyncio
@@ -153,7 +101,7 @@ async def test_a_single_element_still_yields_a_collection(tmp_path):
     await FanRunner(
         child=RunnerCoro(coro=_double), scatter_port="number", outputs={"out": ((), "out")}
     ).run(spec)
-    assert writer.get_json("out") == [10]
+    assert writer.read_json("out") == [10]
 
 
 @pytest.mark.asyncio
@@ -292,6 +240,6 @@ async def test_a_fanned_subdag_runs_every_stage_per_element(tmp_path):
 
     # the fan closed at the node, following the subdag's own output alias
     assert "r1/main/p/clean" in written
-    gathered = store.get_json("clean", at=("p",))
+    gathered = store.read_json("clean", at=("p",))   # descriptor -> the lanes' outputs
     assert len(gathered) == 3
     assert runner.output_scopes() == {"results": (("p",), "clean")}

@@ -74,7 +74,9 @@ class RunResult:
         if self.store is None:
             raise ExecutorError("no store attached to this result")
         scope, key = self.outputs[port]
-        return self.store.get_json(key, at=scope)
+        # read, not get_json: a gathered port is a collection descriptor, and the caller
+        # should not have to know whether it was materialised or left in place
+        return self.store.read_json(key, at=scope)
 
 
 def _live(config) -> Store:

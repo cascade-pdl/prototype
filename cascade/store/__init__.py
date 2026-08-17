@@ -1,5 +1,6 @@
 from .file_store import FileStore, FileConfig
 from .s3_store import S3Store, S3Config
+from .collection import CollectionDescriptor, CollectionError
 from .registry import (
     from_config,
     from_kind,
@@ -11,6 +12,8 @@ from .registry import (
 )
 
 __all__ = [
+    "CollectionDescriptor",
+    "CollectionError",
     "FileStore",
     "FileConfig",
     "S3Store",
