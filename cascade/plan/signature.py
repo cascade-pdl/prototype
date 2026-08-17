@@ -8,45 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from cascade.model.types import TypeError_, TypeExpr
 
-class TypeError_(Exception):
-    """Problem with a type expression."""
-
-
-@dataclass(frozen=True)
-class TypeExpr:
-    """A type expression split into a base type and an array nesting depth.
-    ``"Detection[]"`` -> base="Detection", depth=1; ``"float"`` -> depth=0.
-    Serializes as its rendered string form."""
-
-    base: str
-    depth: int
-
-    @classmethod
-    def parse(cls, s: str) -> "TypeExpr":
-        depth = 0
-        while s.endswith("[]"):
-            s, depth = s[:-2], depth + 1
-        return cls(s.strip(), depth)
-
-    def render(self) -> str:
-        return self.base + "[]" * self.depth
-
-    def as_collection(self) -> "TypeExpr":
-        return TypeExpr(self.base, self.depth + 1)
-
-    def element(self) -> "TypeExpr":
-        if self.depth < 1:
-            raise TypeError_(f"cannot take element of non-collection {self.render()!r}")
-        return TypeExpr(self.base, self.depth - 1)
-
-    # serialization is just the string form
-    def encode(self) -> str:
-        return self.render()
-
-    @classmethod
-    def decode(cls, raw: str) -> "TypeExpr":
-        return cls.parse(raw)
+__all__ = ["Signature", "TypeExpr", "TypeError_"]  # re-exported: callers import both
 
 
 @dataclass

@@ -20,6 +20,8 @@ from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
 from cascade.plan.signature import Signature, TypeExpr
 from cascade.plan.type_env import TypeEnv
+from cascade.model.types import check_annotation
+from cascade.model.types import Structure
 from cascade.plan.elaborate import _NodeInfo, resolve_edge
 
 
@@ -73,7 +75,7 @@ def validate_edges(
                 if node.scatter == port and supplied.depth >= 1:
                     supplied = supplied.element()
                 expected = node_sig.inputs[port]
-                if supplied != expected:
+                if not expected.accepts(supplied):
                     errors.append(
                         f"{dag.name}.{node.name}: port {port!r} expects "
                         f"{expected.render()}, got {supplied.render()} from {dep.node!r}"
@@ -81,18 +83,63 @@ def validate_edges(
     return errors
 
 
+def _check_type(where: str, declared: str, type_env: TypeEnv) -> list[str]:
+    """One declared type: the base must exist, and any annotation must be registered
+    and legal for that base."""
+    errors: list[str] = []
+    t = TypeExpr.parse(declared)
+    # what this pipeline declared is the compiler's business...
+    if not type_env.is_defined(t.base):
+        errors.append(f"{where}: unknown type {t.base!r}")
+        return errors
+    # ...what a type means is the type system's
+    if problem := check_annotation(t.base, t.annotation):
+        errors.append(f"{where}: {problem}")
+    return errors
+
+
 def _check_vocabulary(pipeline: Pipeline, type_env: TypeEnv) -> list[str]:
     errors: list[str] = []
     for ref in pipeline.refs:
         for port in (*ref.input, *ref.output):
-            base = TypeExpr.parse(port.type).base
-            if not type_env.is_defined(base):
-                errors.append(f"ref {ref.name!r} port {port.name!r}: unknown type {base!r}")
+            errors += _check_type(f"ref {ref.name!r} port {port.name!r}", port.type, type_env)
     for dag in pipeline.dags:
         for port in dag.input:
-            base = TypeExpr.parse(port.type).base
-            if not type_env.is_defined(base):
-                errors.append(f"dag {dag.name!r} input {port.name!r}: unknown type {base!r}")
+            errors += _check_type(f"dag {dag.name!r} input {port.name!r}", port.type, type_env)
+    # structure fields were never checked, so a typo'd field type -- or an undefined
+    # one such as `number` -- was silently accepted while the same typo in a port was
+    # caught. Structures compose, so this is where a mistake propagates furthest.
+    for structure in pipeline.types.structures:
+        for f in structure.fields:
+            errors += _check_type(
+                f"structure {structure.name!r} field {f.name!r}", f.type, type_env
+            )
+        errors += _check_field_refinement(structure, type_env)
+    return errors
+
+
+def _check_field_refinement(structure: Structure, type_env: TypeEnv) -> list[str]:
+    """A child may *refine* an inherited field, never widen it.
+
+    ``child.image: string<s3-uri>`` over ``parent.image: string`` is safe — anything
+    reading the parent's field gets a value that still honours the parent's promise.
+    The reverse is not: code expecting an s3 URI would receive an unqualified string.
+    """
+    errors: list[str] = []
+    parent = type_env.structures.get(structure.extends) if structure.extends else None
+    if parent is None:
+        return errors
+    inherited = {f.name: f.type for f in parent.fields}
+    for f in structure.fields:
+        if f.name not in inherited:
+            continue
+        want = TypeExpr.parse(inherited[f.name])
+        got = TypeExpr.parse(f.type)
+        if not want.accepts(got):
+            errors.append(
+                f"structure {structure.name!r} field {f.name!r}: {got.render()} does "
+                f"not refine {want.render()} from {structure.extends!r}"
+            )
     return errors
 
 def _check_reserved_names(pipeline: Pipeline) -> list[str]:
