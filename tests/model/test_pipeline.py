@@ -53,7 +53,7 @@ def test_plan_is_version(plan: Plan):
 def test_dag_outputs_round_trips(plan: Plan):
     wire = plan.encode()
     assert "dag_outputs" in wire, "dag_outputs dropped from encode()"
-    assert wire["version"] == 3
+    assert wire["version"] == 4
     assert Plan.decode(wire) == plan
 
 

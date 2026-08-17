@@ -27,10 +27,11 @@ global scheduling is deliberately out of scope.
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Mapping
+from typing import Any, Awaitable, Mapping
 
 from cascade.engine.binding import InputBinding, InputBindings
 from cascade.engine.instance_path import InstancePath
+from cascade.store.collection import CollectionDescriptor
 from cascade.engine.run_spec import RunSpec
 from cascade.engine.runner.runner import Runner
 from cascade.engine.runner.runner_coro import RunnerCoroBase
@@ -154,13 +155,42 @@ class FanRunner(RunnerCoroBase):
         whether the elements are integers or image crops. A consumer calling
         ``store.read`` cannot tell the difference, which is the point.
         """
-        if self.merge != "concat":
-            raise FanError(
-                f"merge {self.merge!r} is not implemented; only 'concat' matches the "
-                "compiler's arity rule (a gather adds exactly one array level)"
-            )
         for port, (inner_scope, inner_key) in self.outputs.items():
-            spec.store_out.write_collection(
-                port,
-                [((str(i), *inner_scope), inner_key) for i in range(width)],
+            lanes = [((str(i), *inner_scope), inner_key) for i in range(width)]
+            if self.merge == "flatten":
+                self._flatten(spec, port, lanes)
+            else:
+                spec.store_out.write_collection(port, lanes)
+
+    def _flatten(
+        self,
+        spec: RunSpec,
+        port: str,
+        lanes: list[tuple[tuple[str, ...], str]],
+    ) -> None:
+        """Concatenate lane collections into one, at the node's own scope.
+
+        When every lane wrote a descriptor this is **metadata only**: the merged
+        descriptor simply lists all the lanes' elements, with each element's scope
+        prefixed by its lane so it stays relative to the new descriptor's location. No
+        payload moves, which is what makes the expensive-looking reshape the cheap one.
+
+        A lane that wrote a monolithic collection has no elements to reference, so those
+        fall back to reading and concatenating values — the one case where flattening
+        costs what it looks like it costs.
+        """
+        merged: list[tuple[tuple[str, ...], str]] = []
+        for scope, key in lanes:
+            descriptor = CollectionDescriptor.try_decode(spec.store_out.get(key, at=scope))
+            if descriptor is None:
+                # at least one lane is monolithic: concatenate values instead
+                values: list[Any] = []
+                for s, k in lanes:
+                    values.extend(spec.store_out.read_json(k, at=s))
+                spec.store_out.put_json(port, values)
+                return
+            merged.extend(
+                ((*scope, *element_scope), element_key)
+                for element_scope, element_key in descriptor.elements
             )
+        spec.store_out.write_collection(port, merged)

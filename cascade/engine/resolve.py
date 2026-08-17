@@ -123,6 +123,7 @@ def resolve_node(
                 scope=tuple(scope),
                 key=key,
                 encoding=_encoding_for(signature, port),
+                depth=signature.inputs[port].depth,
             )
         )
     return InputBindings(inputs=tuple(bindings))

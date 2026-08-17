@@ -19,8 +19,11 @@ class DagNode:
     one collection and never a fan. Whatever ``runs`` names — a ref or a whole dag —
     is fanned opaquely, which is how multi-stage per-element work is expressed.
 
-    ``merge`` is that gather's policy, and lives here rather than on the consuming
-    edge because the gather happens once, at this node.
+    ``merge`` is that gather's policy, and lives here rather than on the consuming edge
+    because the gather happens once, at this node. It affects the *type*: ``nest`` adds
+    one array level (N lane values become a list of N), while ``flatten`` concatenates
+    lane values that are themselves collections, leaving the depth unchanged. So the
+    compiler reads it, not just the runtime.
     ``args`` are static kwargs.
     """
 
@@ -28,7 +31,7 @@ class DagNode:
     runs: str | None = None
     args: dict[str, Any] = field(default_factory=dict)
     scatter: str | None = None
-    merge: str = "concat"  # concat | dict | latest; only meaningful with scatter
+    merge: str = "nest"  # nest | flatten; only meaningful with scatter
     depends_on: list[Dependency] = field(default_factory=list)
 
     @property
@@ -42,7 +45,7 @@ class DagNode:
             runs=raw.get("runs"),
             args=dict(raw.get("args", {})),
             scatter=raw.get("scatter"),
-            merge=raw.get("merge", "concat"),
+            merge=raw.get("merge", "nest"),
             depends_on=[Dependency.decode(d) for d in raw.get("depends_on", [])],
         )
 

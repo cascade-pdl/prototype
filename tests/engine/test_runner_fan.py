@@ -173,14 +173,56 @@ async def test_an_unbound_scatter_port_is_an_error(tmp_path):
         ).run(spec)
 
 
+# --- merge: nest vs flatten --------------------------------------------------
+
+async def _listify(spec: RunSpec) -> int:
+    """A stand-in ref whose output is itself a collection, so it can be flattened."""
+    binding = spec.inputs.input_for("number")
+    value = spec.store_in.read_json(binding.key, at=binding.scope)
+    spec.store_out.put_json("out", [value, value * 10])
+    return 0
+
+
 @pytest.mark.asyncio
-async def test_unimplemented_merge_is_refused_loudly(tmp_path):
-    spec, _reader, _writer = _fan_setup(tmp_path, [1])
-    with pytest.raises(FanError, match="not implemented"):
-        await FanRunner(
-            child=RunnerCoro(coro=_double), scatter_port="number",
-            outputs={"out": ((), "out")}, merge="dict",
-        ).run(spec)
+async def test_nest_adds_one_array_level(tmp_path):
+    spec, _reader, writer = _fan_setup(tmp_path, [1, 2])
+    await FanRunner(
+        child=RunnerCoro(coro=_listify), scatter_port="number",
+        outputs={"out": ((), "out")}, merge="nest",
+    ).run(spec)
+    assert writer.read_json("out") == [[1, 10], [2, 20]]
+
+
+@pytest.mark.asyncio
+async def test_flatten_concatenates_lane_collections(tmp_path):
+    """Depth unchanged rather than +1 — and when every lane wrote a descriptor this is
+    metadata only, so no payload moves."""
+    spec, _reader, writer = _fan_setup(tmp_path, [1, 2])
+    await FanRunner(
+        child=RunnerCoro(coro=_listify), scatter_port="number",
+        outputs={"out": ((), "out")}, merge="flatten",
+    ).run(spec)
+    assert writer.read_json("out") == [1, 10, 2, 20]
+
+
+@pytest.mark.asyncio
+async def test_flatten_of_distributed_lanes_moves_no_payload(tmp_path):
+    """Each lane writes a descriptor; the merged result references the same elements."""
+    async def writes_a_collection(spec: RunSpec) -> int:
+        binding = spec.inputs.input_for("number")
+        value = spec.store_in.read_json(binding.key, at=binding.scope)
+        spec.store_out.put_json("e", value, at=("parts", "0"))
+        spec.store_out.put_json("e", value * 10, at=("parts", "1"))
+        spec.store_out.write_collection("out", [(("parts", "0"), "e"), (("parts", "1"), "e")])
+        return 0
+
+    spec, _reader, writer = _fan_setup(tmp_path, [1, 2])
+    await FanRunner(
+        child=RunnerCoro(coro=writes_a_collection), scatter_port="number",
+        outputs={"out": ((), "out")}, merge="flatten",
+    ).run(spec)
+    assert writer.is_collection("out")           # still a descriptor: nothing copied
+    assert writer.read_json("out") == [1, 10, 2, 20]
 
 
 # --- a fanned subdag: multi-stage per-element work ---------------------------

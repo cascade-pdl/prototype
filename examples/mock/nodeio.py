@@ -45,9 +45,23 @@ class NodeContext:
             raise KeyError(f"no input bound for port {port!r}")
         if self.store_in is None:
             raise RuntimeError("no reader store: CASCADE_STORE_IN was not set")
-        # read, not get_json: resolves a collection descriptor transparently, so a ref
-        # never learns whether its input was materialised or left in place
-        return self.store_in.read_json(binding.key, at=binding.scope)
+        # read_json, not get_json: resolves a collection descriptor transparently, so a
+        # ref never learns whether its input was materialised or left in place
+        value = self.store_in.read_json(binding.key, at=binding.scope)
+
+        # the binding carries the declared depth, so a misread fails here rather than
+        # somewhere downstream with a confusing symptom
+        if binding.depth == 0 and isinstance(value, list):
+            raise ValueError(
+                f"port {port!r} is declared scalar but received a list of "
+                f"{len(value)} — the pipeline and the stored data disagree"
+            )
+        if binding.depth > 0 and not isinstance(value, list):
+            raise ValueError(
+                f"port {port!r} is declared {binding.depth}-dimensional but received "
+                f"{type(value).__name__}"
+            )
+        return value
 
     def has(self, port: str) -> bool:
         return self.inputs.input_for(port) is not None

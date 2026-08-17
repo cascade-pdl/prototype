@@ -31,6 +31,8 @@ def validate_edges(
 ) -> list[str]:
     errors: list[str] = []
 
+    errors += _check_reserved_names(pipeline)
+
     if type_env is not None:
         errors += _check_vocabulary(pipeline, type_env)
 
@@ -44,6 +46,7 @@ def validate_edges(
             info[node.name] = _NodeInfo(
                 sig=signatures[node.runnable_name],
                 fan=node.scatter is not None,
+                merge=node.merge,
             )
 
         for node in dag.nodes:
@@ -90,4 +93,37 @@ def _check_vocabulary(pipeline: Pipeline, type_env: TypeEnv) -> list[str]:
             base = TypeExpr.parse(port.type).base
             if not type_env.is_defined(base):
                 errors.append(f"dag {dag.name!r} input {port.name!r}: unknown type {base!r}")
+    return errors
+
+def _check_reserved_names(pipeline: Pipeline) -> list[str]:
+    """``$`` is the engine's sigil, so declared names may not start with it.
+
+    It already marks engine-owned names in the DSL (``$input``) and in the store
+    (``$in`` for a run's staged inputs, ``$cascade.collection`` for a collection
+    descriptor). Reserving it makes those unambiguous by construction rather than by
+    convention: in particular a ref's output cannot collide with the descriptor marker,
+    which is what lets the store discriminate a collection from data by inspection.
+    """
+    errors: list[str] = []
+
+    def check(where: str, names: "list[str]") -> None:
+        for name in names:
+            if name.startswith("$"):
+                errors.append(
+                    f"{where}: name {name!r} starts with '$', which is reserved for "
+                    "engine-owned names"
+                )
+
+    for ref in pipeline.refs:
+        check(f"ref {ref.name!r}", [p.name for p in (*ref.input, *ref.output)])
+        check("refs", [ref.name])
+    for dag in pipeline.dags:
+        check(f"dag {dag.name!r}", [p.name for p in dag.input])
+        check("dags", [dag.name])
+        for node in dag.nodes:
+            check(f"dag {dag.name!r}", [node.name])
+    for structure in pipeline.types.structures:
+        check(f"structure {structure.name!r}", [f.name for f in structure.fields])
+        check("types", [structure.name])
+
     return errors

@@ -31,10 +31,16 @@ class ElaborationError(Exception):
     """A signature could not be derived (shape/arity)."""
 
 
+MERGE_NEST = "nest"
+MERGE_FLATTEN = "flatten"
+MERGES = (MERGE_NEST, MERGE_FLATTEN)
+
+
 @dataclass
 class _NodeInfo:
     sig: Signature
     fan: bool  # node.scatter is not None -- read, never propagated
+    merge: str = MERGE_NEST  # how this node's gather shapes its output
 
 
 def elaborate(
@@ -72,7 +78,9 @@ def _from_dag(dag: Dag, graph: Graph[DagNode, Dependency], sigs: dict[str, Signa
         info[node.name] = _NodeInfo(
             sig=sigs[node.runnable_name],  # already resolved (call-graph order)
             fan=node.scatter is not None,
+            merge=node.merge,
         )
+        _check_merge(node, info[node.name].sig)
         _check_scatter(node, info, dag_inputs)
 
     outputs: dict[str, TypeExpr] = {}
@@ -87,9 +95,10 @@ def resolve_edge(
 ) -> TypeExpr:
     """The type flowing along one edge.
 
-    One rule, no choices: a fanned producer's output is gathered at its own boundary,
-    so it arrives one array level deeper than declared; anything else arrives as
-    declared.
+    A fanned producer's output is gathered at its own boundary, so how it arrives depends
+    on that node's merge policy: ``nest`` wraps the N lane values, arriving one array
+    level deeper than declared; ``flatten`` concatenates them, arriving as declared. An
+    unfanned producer arrives as declared.
     """
     if dep.is_input:
         if dep.field not in dag_inputs:
@@ -109,7 +118,30 @@ def resolve_edge(
     if field not in up.sig.outputs:
         raise ElaborationError(f"node {dep.node!r} has no output {field!r}")
     t = up.sig.outputs[field]
-    return t.as_collection() if up.fan else t
+    if not up.fan:
+        return t
+    return t if up.merge == MERGE_FLATTEN else t.as_collection()
+
+
+def _check_merge(node: DagNode, sig: Signature) -> None:
+    if node.merge not in MERGES:
+        raise ElaborationError(
+            f"{node.name}: unknown merge {node.merge!r}; expected one of {MERGES}"
+        )
+    if node.merge != MERGE_FLATTEN:
+        return
+    if node.scatter is None:
+        raise ElaborationError(
+            f"{node.name}: merge {MERGE_FLATTEN!r} is meaningless without 'scatter'"
+        )
+    # flattening concatenates lane values, so each must itself be a collection;
+    # flattening scalars would just be nesting under a misleading name
+    for port, t in sig.outputs.items():
+        if t.depth < 1:
+            raise ElaborationError(
+                f"{node.name}: merge {MERGE_FLATTEN!r} needs collection outputs, but "
+                f"port {port!r} is {t.render()}"
+            )
 
 
 def _check_scatter(node: DagNode, info: dict[str, _NodeInfo], dag_inputs: dict[str, TypeExpr]) -> None:

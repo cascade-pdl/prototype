@@ -13,11 +13,20 @@ Nothing about an output varies per instance, so there is nothing to communicate.
 Inputs are the opposite — lane 3 reads element 3, and two instances of one ref point
 at different producers — which is exactly why they travel per spawn.
 
-Encoding travels with the binding rather than being looked up by the instance,
-because the engine is the only party that knows it (it is declared in the pipeline).
-Until port encodings are persisted in ``Signature`` the executor cannot populate this
-faithfully, so it defaults to JSON; the field exists now so that code written against
-it does not change when that lands.
+``encoding`` and ``depth`` travel with the binding because the engine is the only party
+that knows them — both are declared in the pipeline, and re-deriving either inside a
+container would mean shipping the plan with every task.
+
+``depth`` is what a ref checks itself against: a port declared depth 0 that receives a
+list, or depth 1 that receives a scalar, is a mismatch worth failing on loudly rather
+than misinterpreting. It is *not* needed to decide how to read — ``Store.read`` resolves
+a collection descriptor whatever the declared shape — but it is what turns a silent
+misread into an error, and it is the hook the codec (item 1.7) needs to split a
+monolithic non-JSON collection.
+
+Until port encodings are persisted in ``Signature`` the executor cannot populate
+``encoding`` faithfully, so it defaults to JSON; the field exists now so that code
+written against it does not change when that lands.
 
 These cross into containers via env, so everything here is JSON-encodable.
 """
@@ -37,6 +46,7 @@ class InputBinding:
     scope: tuple[str, ...]
     key: str
     encoding: DataFormat = DataFormat.json
+    depth: int = 0
 
     def encode(self) -> dict[str, Any]:
         return {
@@ -44,6 +54,7 @@ class InputBinding:
             "scope": list(self.scope),
             "key": self.key,
             "encoding": self.encoding.value,
+            "depth": self.depth,
         }
 
     @classmethod
@@ -53,6 +64,7 @@ class InputBinding:
             scope=tuple(raw["scope"]),
             key=raw["key"],
             encoding=DataFormat(raw.get("encoding", DataFormat.json.value)),
+            depth=raw.get("depth", 0),
         )
 
 
