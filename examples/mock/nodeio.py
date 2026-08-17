@@ -22,11 +22,40 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from cascade.engine.binding import InputBindings
-from cascade.store.registry import decode as decode_store
+
+def _ensure_cascade_importable() -> None:
+    """Put the repo root on ``sys.path`` if ``cascade`` is not already importable.
+
+    A subprocess ref inherits whatever interpreter ``cmd`` names — and a bare ``python``
+    is rarely the one the framework is installed into (a Poetry venv, a uv shim, the
+    system Python). Rather than demand a particular interpreter, note that the node-side
+    imports need **no third-party packages** (boto3 is imported lazily, yaml is not in the
+    chain), so adding the repo root is enough to make the demo run anywhere.
+
+    This is demo scaffolding. A real ref is a container image with cascade installed, and
+    the fact that a *subprocess* ref has an environment dependency nothing declares is a
+    genuine gap in the ref model, not something to paper over in the library.
+    """
+    try:
+        import cascade  # noqa: F401
+        return
+    except ModuleNotFoundError:
+        pass
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").is_file():
+            sys.path.insert(0, str(parent))
+            return
+
+
+_ensure_cascade_importable()
+
+from cascade.engine.binding import InputBindings  # noqa: E402
+from cascade.store.registry import decode as decode_store  # noqa: E402
 
 
 @dataclass

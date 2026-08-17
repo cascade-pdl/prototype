@@ -18,13 +18,15 @@ class HandleSubprocess(HandleCoro):
 
 
 class RunnerSubprocess(Runner):
-    def __init__(self, cmd: list[str]):
+    def __init__(self, cmd: list[str], cwd: str | None = None):
         self.cmd = cmd
+        self.cwd = cwd
 
     async def spawn(self, spec: RunSpec):
         return HandleSubprocess(
             process=await asyncio.create_subprocess_exec(
                 *self.cmd,
+                cwd=self.cwd,
                 env={**os.environ, **to_env(spec)},
             ),
         )

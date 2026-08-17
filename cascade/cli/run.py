@@ -17,6 +17,7 @@ from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import CompileError, compile_pipeline
 from cascade.plan.plan import Plan, PlanVersionError
 from cascade.engine.executor import Executor, ExecutorError
+from cascade.engine.runner.registry import RunnerEnv
 from cascade.cli.errors import CliError
 from cascade.cli._resolve import add_store_flags, build_store
 
@@ -52,8 +53,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             inputs[name] = raw  # a bare string is the common case
 
     store = build_store(args)
+    # a ref's relative command resolves against the document that declared it, so the
+    # same pipeline runs the same way from any working directory
+    env = RunnerEnv(cwd=str(Path(args.pipeline).resolve().parent))
     try:
-        result = asyncio.run(Executor(plan, store=store).run(inputs=inputs, run_id=args.run_id))
+        result = asyncio.run(
+            Executor(plan, store=store, env=env).run(inputs=inputs, run_id=args.run_id)
+        )
     except ExecutorError as e:
         raise CliError(str(e))
 

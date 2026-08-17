@@ -1,0 +1,5 @@
+[project]
+name = "mock"
+pipeline = "pipeline.yaml"
+deployment = "deployment.yaml"
+description = "A synthetic pipeline: a source of integers, then a fanned detector."

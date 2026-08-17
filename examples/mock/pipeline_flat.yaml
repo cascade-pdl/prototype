@@ -14,13 +14,13 @@ input: []
 refs:
   - name: source
     runner: subprocess
-    config: { cmd: ["python", "examples/mock/mock_source.py"] }
+    config: { cmd: ["python", "mock_source.py"] }
     input: []
     output: [ { name: numbers, type: "int[]" } ]
 
   - name: detect
     runner: subprocess
-    config: { cmd: ["python", "examples/mock/mock_detect.py"] }
+    config: { cmd: ["python", "mock_detect.py"] }
     input:  [ { name: numbers,    type: "int[]" } ]
     output: [ { name: detections, type: "Detection[]" } ]
 

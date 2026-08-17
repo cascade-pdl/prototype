@@ -1,0 +1,10 @@
+# Local development: a file store beside the project, no runner overrides.
+name: local
+
+store:
+  kind: file
+  config:
+    root: ./_store
+    scope: [mock]
+
+runners: {}

@@ -46,11 +46,16 @@ def _plan(path: Path):
 
 
 def _with_this_interpreter(plan):
-    """The pipelines say `python`; in a venv or on Windows that may not be the
-    interpreter running the tests. Point the refs at sys.executable."""
+    """Rewrite each ref's command for the test environment.
+
+    The pipelines say `python` and name their scripts *project-relative*, which is what
+    lets `cascade run` work from inside `examples/mock`. Neither holds here: the tests may
+    run under a venv interpreter that `python` does not resolve to, and from any cwd — so
+    both halves are made absolute.
+    """
     for config in plan.run_config.values():
         cmd = list(config.config.cmd)
-        config.config.cmd = [sys.executable, str(ROOT / cmd[1])]
+        config.config.cmd = [sys.executable, str(EXAMPLES / cmd[-1])]
     return plan
 
 
@@ -146,3 +151,53 @@ async def test_each_lane_gets_its_own_slot_and_staged_element(tmp_path):
     assert "mock/r1/main/det/3/$in/number" in written   # staged element
     assert "mock/r1/main/det/3/detections" in written   # that lane's output
     assert "mock/r1/main/det/detections" in written     # the gathered collection
+
+
+# --- cwd independence --------------------------------------------------------
+# Two bugs made this worth pinning: a ref's relative command used to resolve against
+# whatever directory the operator happened to be in, and once the child was given a cwd
+# a *relative store root* meant different things to parent and child.
+
+def _run_cli(cwd: Path, *argv: str) -> int:
+    import os
+
+    from cascade.cli.main import main
+
+    previous = Path.cwd()
+    try:
+        os.chdir(cwd)
+        return main(list(argv))
+    finally:
+        os.chdir(previous)
+
+
+def test_runs_from_inside_the_project(tmp_path, capsys):
+    """The route a real user takes."""
+    assert _run_cli(EXAMPLES, "run", "pipeline_flat.yaml",
+                    "--backend", "file", "--root", str(tmp_path)) == 0
+    assert "complete" in capsys.readouterr().out
+
+
+def test_runs_from_the_repo_root(tmp_path, capsys):
+    """A ref's relative command resolves against the pipeline's directory, not the cwd."""
+    assert _run_cli(ROOT, "run", "examples/mock/pipeline_flat.yaml",
+                    "--backend", "file", "--root", str(tmp_path)) == 0
+    assert "complete" in capsys.readouterr().out
+
+
+def test_runs_from_an_unrelated_directory(tmp_path, capsys):
+    unrelated = tmp_path / "elsewhere"
+    unrelated.mkdir()
+    assert _run_cli(unrelated, "run", str(EXAMPLES / "pipeline_flat.yaml"),
+                    "--backend", "file", "--root", str(tmp_path / "store")) == 0
+    assert "complete" in capsys.readouterr().out
+
+
+def test_a_relative_store_root_resolves_against_the_operators_cwd(tmp_path, capsys):
+    """The child runs elsewhere, so the root must be made absolute before it travels
+    in CASCADE_STORE_OUT — otherwise parent and child write to different places."""
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_cli(work, "run", str(EXAMPLES / "pipeline_flat.yaml"),
+                    "--backend", "file", "--root", "relstore") == 0
+    assert (work / "relstore").is_dir()

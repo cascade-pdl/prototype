@@ -49,6 +49,10 @@ class RunnerEnv:
 
     aws_credentials_dir: str | None = None
     map_current_user: bool = True
+    cwd: str | None = None
+    """Where a ref's *relative* command resolves. The CLI sets it to the directory of
+    the pipeline (or plan) being run, so a ref may name its script relative to the
+    document that declares it and the run works from any working directory."""
 
 
 def merge_overrides(
@@ -101,7 +105,7 @@ def _build_subprocess(
     signature: Signature | None = None,
 ) -> Runner:
     assert isinstance(config, RefSubprocess)
-    return RunnerSubprocess(cmd=list(config.cmd))
+    return RunnerSubprocess(cmd=list(config.cmd), cwd=env.cwd)
 
 
 def _build_echo(

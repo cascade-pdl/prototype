@@ -22,6 +22,8 @@ from dataclasses import replace
 
 from cascade.project import find_project, ProjectNotFound
 from cascade.deployment import Deployment
+from pathlib import Path
+
 from cascade.store.base import Store, StoreConfig
 from cascade.store.file_store import FileConfig
 from cascade.store.s3_store import S3Config
@@ -59,6 +61,16 @@ def _config_from_flags(args: argparse.Namespace) -> StoreConfig:
     raise CliError(f"unknown backend {args.backend!r}")
 
 
+def _project_root(args: argparse.Namespace) -> Path:
+    try:
+        _project, root = find_project(args.project)
+    except ProjectNotFound:
+        raise CliError(
+            "not inside a cascade project; pass --backend/--root or cd into one"
+        )
+    return root
+
+
 def _config_from_project(args: argparse.Namespace) -> StoreConfig:
     try:
         project, root = find_project(args.project)
@@ -74,9 +86,28 @@ def _config_from_project(args: argparse.Namespace) -> StoreConfig:
     return deployment.store
 
 
+def _absolute_root(config: StoreConfig, base: Path) -> StoreConfig:
+    """Resolve a relative file-store root against ``base``.
+
+    A relative root is ambiguous the moment anything runs in a different working
+    directory — and a subprocess ref does exactly that, since its command resolves
+    against the pipeline's directory. Absolute here means parent and child agree, and
+    the config that travels in ``CASCADE_STORE_OUT`` names one place.
+    """
+    if isinstance(config, FileConfig) and not Path(config.root).is_absolute():
+        return replace(config, root=str((base / config.root).resolve()))
+    return config
+
+
 def build_store(args: argparse.Namespace) -> Store:
     """Resolve args to a live store, applying the precedence rules above."""
-    config = _config_from_flags(args) if args.backend else _config_from_project(args)
+    if args.backend:
+        # a flag-supplied root is relative to where the operator typed it
+        config = _absolute_root(_config_from_flags(args), Path.cwd())
+    else:
+        project_root = _project_root(args)
+        # a deployment-supplied root is relative to the project that declared it
+        config = _absolute_root(_config_from_project(args), project_root)
     if args.scope is not None:
         config = replace(config, scope=tuple(args.scope))
     # go through the registry envelope so this is exactly the store a node would
