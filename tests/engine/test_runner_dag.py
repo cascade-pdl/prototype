@@ -142,7 +142,7 @@ async def test_m1_two_node_dag_runs_end_to_end(plan, stores, tmp_path):
     assert code == 0
 
     # both nodes wrote into their own slots, beneath the dag's
-    assert stores.get_json("items", at=("load",))["port"] == "items"
+    assert stores.get_json("items", at=("load",))[0]["port"] == "items"  # Item[] -> list
     assert stores.get_json("scored", at=("score",))["port"] == "scored"
 
     # the layout mirrors the dag, under the deployment's base scope
@@ -174,7 +174,7 @@ async def test_the_downstream_node_reads_the_upstream_output(plan, stores):
     )
     graph = plan.node_graphs["main"]
     binding = resolve_node(graph.node("score"), plan, graph, InputBindings()).input_for("items")
-    assert stores.get_json(binding.key, at=binding.scope)["runnable"] == "load"
+    assert stores.get_json(binding.key, at=binding.scope)[0]["runnable"] == "load"
 
 
 @pytest.mark.asyncio
@@ -306,4 +306,4 @@ async def test_a_subdag_node_resolves_its_input_through_the_alias(nested_plan, t
     # what a hypothetical downstream of 'p' would be told
     graph = nested_plan.node_graphs["main"]
     scope, key = resolve_dag_output(nested_plan, "prep", "ready")
-    assert store.get_json(key, at=("p", *scope))["runnable"] == "tidy"
+    assert store.get_json(key, at=("p", *scope))[0]["runnable"] == "tidy"

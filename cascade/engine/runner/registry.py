@@ -114,7 +114,8 @@ def _build_echo(
     # output ports come from the plan: per-runnable, like the runner itself
     return RunnerEcho(
         message=config.message,
-        outputs=tuple(signature.outputs) if signature else (),
+        # port -> declared depth, so a T[] stub is a list
+        outputs={p: t.depth for p, t in signature.outputs.items()} if signature else {},
     )
 
 

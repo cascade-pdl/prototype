@@ -154,12 +154,12 @@ def test_echo_takes_its_output_ports_from_the_signature():
         RunConfig(runner=RunnerKind.echo, config=RefEcho(message="hi")),
         signature=sig,
     )
-    assert runner.outputs == ("scored", "log")
+    assert runner.outputs == {"scored": 0, "log": 0}
 
 
 def test_echo_without_a_signature_writes_nothing():
     runner = build_runner(RunConfig(runner=RunnerKind.echo, config=RefEcho()))
-    assert runner.outputs == ()
+    assert runner.outputs == {}
 
 
 def test_other_kinds_ignore_the_signature():
@@ -183,8 +183,10 @@ async def test_echo_writes_a_stub_for_each_output_port(tmp_path):
     rc = await runner.run(RunSpec(name="detect", run_id="r1", instance_id="r1/main/d", store_out=store))
     assert rc == 0
     written = store.get_json("dets")
-    assert written["port"] == "dets"
-    assert written["echo"] == "detected"
+    # Detection[] is depth 1, so the stub is a list -- a downstream node can fan it
+    assert isinstance(written, list)
+    assert written[0]["port"] == "dets"
+    assert written[0]["echo"] == "detected"
     assert (tmp_path / "r1" / "main" / "d" / "dets").is_file()
 
 

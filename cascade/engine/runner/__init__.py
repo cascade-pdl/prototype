@@ -21,6 +21,7 @@ from cascade.engine.runner.registry import RunnerEnv, build_runner, merge_overri
 from cascade.engine.binding import InputBinding, InputBindings
 from cascade.engine.instance_path import InstancePath
 from cascade.engine.runner.runner_dag import DagRunner, DagRunError
+from cascade.engine.runner.runner_fan import FanRunner, FanError
 
 __all__ = [
     "Runner",
@@ -43,4 +44,6 @@ __all__ = [
     "InstancePath",
     "DagRunner",
     "DagRunError",
+    "FanRunner",
+    "FanError",
 ]

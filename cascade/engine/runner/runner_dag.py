@@ -37,11 +37,12 @@ from cascade.store.registry import from_config
 
 from cascade.engine.binding import InputBindings
 from cascade.engine.instance_path import InstancePath
-from cascade.engine.resolve import ResolveError, resolve_node
+from cascade.engine.resolve import ResolveError, resolve_dag_output, resolve_node
 from cascade.engine.run_spec import RunSpec
 from cascade.engine.runner.registry import RunnerEnv, build_runner
 from cascade.engine.runner.runner import Runner
 from cascade.engine.runner.runner_coro import RunnerCoroBase
+from cascade.engine.runner.runner_fan import FanRunner
 
 
 class DagRunError(Exception):
@@ -94,6 +95,19 @@ class DagRunner(RunnerCoroBase):
             signature=self.plan.signatures.get(runnable),
         )
 
+    def _lane_outputs(self, runnable: str) -> dict[str, tuple[tuple[str, ...], str]]:
+        """Where each output port lands inside one lane. A ref writes at the lane
+        root; a dag writes through its inner nodes, so its alias must be followed."""
+        signature = self.plan.signatures.get(runnable)
+        if signature is None:
+            return {}
+        if runnable in self.plan.node_graphs:
+            return {
+                port: resolve_dag_output(self.plan, runnable, port)
+                for port in signature.outputs
+            }
+        return {port: ((), port) for port in signature.outputs}
+
     async def _run_node(
         self,
         node: DagNode,
@@ -118,11 +132,13 @@ class DagRunner(RunnerCoroBase):
         )
         runner = self._runner_for(node.runnable_name)
         if node.scatter is not None:
-            # FanRunner(child) wraps whatever this node runs -- a ref or a whole dag --
-            # and gathers the lanes at this node's boundary (item 2.4).
-            raise DagRunError(
-                f"{child_path}: node scatters over {node.scatter!r}; "
-                "FanRunner (item 2.4) is not built yet"
+            # wrap whatever this node runs -- a ref or a whole dag -- and let the fan
+            # close at this node's boundary, so downstream sees one collection
+            runner = FanRunner(
+                child=runner,
+                scatter_port=node.scatter,
+                outputs=self._lane_outputs(node.runnable_name),
+                merge=node.merge,
             )
         code = await runner.run(child)
         if code != 0:
