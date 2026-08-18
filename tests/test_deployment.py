@@ -6,7 +6,7 @@ deployment -> engine -> node-env hop rests on, so it gets its own test.
 """
 from cascade.deployment import Deployment
 from cascade.store.file_store import FileConfig, FileStore
-from cascade.store.s3_store import S3Config, S3Store
+from cascade.store.s3_store import S3Config
 from cascade.store.registry import decode as decode_store
 from cascade.model.runner_kinds import RunnerKind
 from cascade.model.runner_overrides import DockerOverride

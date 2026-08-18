@@ -30,9 +30,6 @@ class Pipeline:
         """Resolve a runnable by name across both refs and dags."""
         return self.find_ref(name) or self.find_dag(name)
 
-    def find_input(self, name: str) -> IoDecl | None:
-        return next((i for i in self.input if i.name == name), None)
-
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> Self:
         return cls(

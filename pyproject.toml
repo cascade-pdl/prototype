@@ -34,4 +34,15 @@ python-lsp-black = "^2.0.0"
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.1.1"
 pytest-asyncio = "^1.4.0"
+ruff = "^0.16.3"
 
+[tool.ruff]
+target-version = "py313"
+ 
+[tool.ruff.lint]
+# The correctness subset only: F catches undefined names (F821) and unused imports
+# (F401) -- the two halves of the bug that 232 passing tests could not see, because a
+# dead function's body is never executed and `from __future__ import annotations` makes
+# its annotations lazy strings. E9 catches syntax and IO errors. Style rules are
+# deliberately left out: a linter that fails on day one gets ignored.
+select = ["F", "E9"]

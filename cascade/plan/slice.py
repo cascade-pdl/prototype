@@ -1,12 +1,11 @@
 """Slicing a Plan to a reachable set, and the orphan query that is its complement.
 
 One reachability op (``reachable_from`` over the call graph derived from the node
-graphs) underlies all three:
-  * ``slice_plan(plan, root)`` — project every map onto what ``root`` reaches.
-    Used to scope a subdag's plan for a dag-container, or to scope the top plan.
-  * ``trim(plan)``            — ``slice_plan(plan, plan.entrypoint)``: drop dead
-    branches. Not a separate algorithm — the entrypoint-rooted slice.
-  * ``find_orphans(plan)``    — the *complement*: declared minus reachable. Same
+graphs) underlies both:
+  * ``slice_plan(plan, root)`` — project every map onto what ``root`` reaches. Used to
+    scope a subdag's plan for a dag-container, or to trim the top plan by slicing from
+    its own entrypoint.
+  * ``find_orphans(plan)``     — the *complement*: declared minus reachable. Same
     computation, opposite disposition (report the leftover instead of dropping it).
 
 The call graph is never stored; it is rebuilt here from ``plan.node_graphs`` each
@@ -37,11 +36,6 @@ def slice_plan(plan: Plan, root: str) -> Plan:
         version=plan.version,
     )
 
-
-def trim(plan: Plan) -> Plan:
-    """Drop everything unreachable from the entrypoint. The entrypoint-rooted
-    slice — a convenience name, not a distinct operation."""
-    return slice_plan(plan, plan.entrypoint)
 
 
 def find_orphans(plan: Plan, include_imported: bool = True) -> set[str]:

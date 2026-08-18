@@ -11,7 +11,6 @@ from yaml import safe_load
 from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import compile_pipeline
 from cascade.engine.binding import InputBinding, InputBindings
-from cascade.engine.instance_path import InstancePath
 from cascade.engine.resolve import (
     ResolveError,
     resolve_dag_output,
@@ -304,6 +303,5 @@ async def test_a_subdag_node_resolves_its_input_through_the_alias(nested_plan, t
         )
     )
     # what a hypothetical downstream of 'p' would be told
-    graph = nested_plan.node_graphs["main"]
     scope, key = resolve_dag_output(nested_plan, "prep", "ready")
     assert store.get_json(key, at=("p", *scope))[0]["runnable"] == "tidy"

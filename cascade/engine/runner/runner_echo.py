@@ -14,7 +14,6 @@ where that is.
 """
 from __future__ import annotations
 
-import json
 from typing import Any, Awaitable, Mapping
 
 from cascade.engine.runner.runner_coro import RunnerCoroBase

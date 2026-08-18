@@ -71,7 +71,7 @@ def test_nested_collections_resolve_to_nested_lists(store):
 def test_a_descriptor_resolves_the_same_from_any_depth_above_it(store, tmp_path):
     """Position independence: element scopes are relative to the descriptor, so the
     engine can hand out stores at several depths and reads still agree."""
-    from cascade.store.file_store import FileConfig, FileStore
+    from cascade.store.file_store import FileStore
 
     store.put_json("v", 42, at=("node", "0"))
     store.write_collection("out", [(("0",), "v")], at=("node",))

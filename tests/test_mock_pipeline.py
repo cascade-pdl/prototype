@@ -5,7 +5,6 @@ files, the node-side contract exercised for real rather than through `RunnerEcho
 is also the honest record of where the executor currently stops — the scattered variant
 asserts the *designed* failure rather than pretending to pass.
 """
-import json
 import sys
 from pathlib import Path
 
@@ -16,7 +15,7 @@ from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import check, compile_pipeline
 from cascade.engine.binding import InputBindings
 from cascade.engine.run_spec import RunSpec
-from cascade.engine.runner.runner_dag import DagRunner, DagRunError
+from cascade.engine.runner.runner_dag import DagRunner
 from cascade.store.file_store import FileConfig, FileStore
 
 

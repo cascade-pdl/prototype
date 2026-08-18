@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from cascade.engine.runner.runner_subprocess import RunnerSubprocess, HandleSubprocess
+from cascade.engine.runner.runner_subprocess import RunnerSubprocess
 from cascade.engine.run_spec import RunSpec
 
 
@@ -15,4 +15,4 @@ async def test_runner_coro():
             run_id="testid",
         ),
     )
-    res = await handle.await_done()
+    assert (await handle.await_done()).exit_code == 0
