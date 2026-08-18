@@ -50,9 +50,3 @@ class Ref:
             input=[IoDecl.decode(i) for i in raw.get("input", [])],
             output=[IoDecl.decode(o) for o in raw.get("output", [])],
         )
-
-    def output_field(self, name: str | None) -> IoDecl | None:
-        """Resolve an output field by name, or the sole output if name is None."""
-        if name is None:
-            return self.output[0] if len(self.output) == 1 else None
-        return next((o for o in self.output if o.name == name), None)
