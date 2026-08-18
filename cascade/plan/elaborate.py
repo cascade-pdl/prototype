@@ -64,13 +64,13 @@ def elaborate(
 
 def _from_ref(ref: Ref) -> Signature:
     return Signature(
-        inputs={p.name: TypeExpr.parse(p.type) for p in ref.input},
-        outputs={p.name: TypeExpr.parse(p.type) for p in ref.output},
+        inputs={p.name: p.type for p in ref.input},
+        outputs={p.name: p.type for p in ref.output},
     )
 
 
 def _from_dag(dag: Dag, graph: Graph[DagNode, Dependency], sigs: dict[str, Signature]) -> Signature:
-    dag_inputs = {p.name: TypeExpr.parse(p.type) for p in dag.input}
+    dag_inputs = {p.name: p.type for p in dag.input}
 
     info: dict[str, _NodeInfo] = {}
     for node_name in graph.static_order():  # raises GraphCycleError on a node cycle

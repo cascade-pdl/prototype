@@ -38,15 +38,46 @@ class TypeExpr:
 
     @classmethod
     def parse(cls, s: str) -> "TypeExpr":
+        """Parse a declared type, rejecting anything malformed.
+
+        Strict on purpose, and called at *decode* rather than at each use: an
+        unparseable expression should be reported against the document that declared
+        it, not surface later as a confusing "unknown type 'foo<bar'". Whether the base
+        *exists* is a separate question — that needs the pipeline's ``TypeEnv``, so it
+        stays with the compiler.
+        """
+        original = s
         s = s.strip()
         depth = 0
         while s.endswith("[]"):
             s, depth = s[:-2], depth + 1
+
         annotation = None
-        if s.endswith(">") and "<" in s:
+        if "<" in s or ">" in s:
+            if s.count("<") != 1 or not s.endswith(">"):
+                raise TypeError_(
+                    f"malformed type {original!r}: an annotation is written "
+                    "'base<name>', with one '<' and a closing '>'"
+                )
             s, _, annotation = s[:-1].partition("<")
-            annotation = annotation.strip() or None
-        return cls(s.strip(), depth, annotation)
+            annotation = annotation.strip()
+            if not annotation:
+                raise TypeError_(f"malformed type {original!r}: empty annotation")
+            if ">" in annotation or "[" in annotation or "]" in annotation:
+                raise TypeError_(
+                    f"malformed type {original!r}: annotation {annotation!r} contains "
+                    "a reserved character"
+                )
+
+        base = s.strip()
+        if not base:
+            raise TypeError_(f"malformed type {original!r}: no base type")
+        if any(c in base for c in "[]<> "):
+            raise TypeError_(
+                f"malformed type {original!r}: base {base!r} contains a reserved "
+                "character; array brackets belong at the end"
+            )
+        return cls(base, depth, annotation)
 
     def render(self) -> str:
         suffix = f"<{self.annotation}>" if self.annotation else ""

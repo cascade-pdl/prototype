@@ -4,20 +4,22 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Self
 
+from cascade.model.types.expr import TypeExpr
+
 
 @dataclass
 class FieldDecl:
     """One field of a structure: a name and a type expression string."""
 
     name: str
-    type: str  # raw type expression, e.g. "float", "string<uuid>", "Detection[]"
+    type: TypeExpr  # parsed at decode, so a malformed expression is reported here
 
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> Self:
-        return cls(name=raw["name"], type=raw["type"])
+        return cls(name=raw["name"], type=TypeExpr.parse(raw["type"]))
 
     def encode(self) -> dict[str, Any]:
-        return {"name": self.name, "type": self.type}
+        return {"name": self.name, "type": self.type.render()}
 
 
 @dataclass
@@ -66,7 +68,7 @@ class DataFormat(str, Enum):
 @dataclass
 class IOField:
     name: str
-    type: str
+    type: TypeExpr
 
 
 @dataclass
@@ -95,9 +97,9 @@ class IoDecl(IOField):
     def decode(cls, raw: dict[str, Any]) -> Self:
         return cls(
             name=raw["name"],
-            type=raw["type"],
+            type=TypeExpr.parse(raw["type"]),
             config=IoConfig.decode(raw.get("config", {})),
         )
 
     def encode(self) -> dict[str, Any]:
-        return {"name": self.name, "type": self.type, "config": self.config.encode()}
+        return {"name": self.name, "type": self.type.render(), "config": self.config.encode()}

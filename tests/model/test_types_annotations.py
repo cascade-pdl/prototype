@@ -7,7 +7,7 @@ or omitted — so a promise may be forgotten but never invented.
 import pytest
 from yaml import safe_load
 
-from cascade.model.types import check_annotation, get, known
+from cascade.model.types import TypeError_, check_annotation, get, known
 from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import check
 from cascade.model.types import TypeExpr
@@ -36,8 +36,38 @@ def test_element_and_collection_preserve_the_annotation():
     assert TypeExpr.parse("string<uri>").as_collection().render() == "string<uri>[]"
 
 
-def test_an_empty_annotation_is_no_annotation():
-    assert TypeExpr.parse("string<>").annotation is None
+# --- parsing is strict, and happens at decode --------------------------------
+
+@pytest.mark.parametrize(
+    "malformed",
+    ["string<>", "foo<bar", "x<y><z>", "a[]b", "", "   ", "string<a[b]>"],
+)
+def test_malformed_expressions_are_rejected(malformed):
+    """Previously every one of these parsed silently — `foo<bar` became a base type
+    called 'foo<bar', surfacing later as a confusing 'unknown type'."""
+    with pytest.raises(TypeError_):
+        TypeExpr.parse(malformed)
+
+
+def test_a_malformed_type_is_reported_against_the_document(tmp_path):
+    """Because parsing happens at decode, the error names the pipeline, not some
+    downstream lookup."""
+    from cascade.model.pipeline import Pipeline
+
+    y = safe_load("""
+entrypoint: main
+input: []
+types: { structures: [] }
+refs:
+  - { name: r, runner: echo, config: {}, input: [], output: [ { name: o, type: "string<bad" } ] }
+dags:
+  - name: main
+    input: []
+    nodes: [ { name: n, runs: r } ]
+    output: []
+""")
+    with pytest.raises(TypeError_, match="malformed type"):
+        Pipeline.decode(y)
 
 
 # --- the acceptance rule -----------------------------------------------------

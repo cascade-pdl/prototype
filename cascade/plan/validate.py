@@ -40,7 +40,7 @@ def validate_edges(
 
     for dag in pipeline.dags:
         graph = node_graphs[dag.name]
-        dag_inputs = {p.name: TypeExpr.parse(p.type) for p in dag.input}
+        dag_inputs = {p.name: p.type for p in dag.input}
 
         info: dict[str, _NodeInfo] = {}
         for node_name in graph.static_order():
@@ -83,11 +83,14 @@ def validate_edges(
     return errors
 
 
-def _check_type(where: str, declared: str, type_env: TypeEnv) -> list[str]:
-    """One declared type: the base must exist, and any annotation must be registered
-    and legal for that base."""
+def _check_type(where: str, declared: TypeExpr, type_env: TypeEnv) -> list[str]:
+    """One declared type, already parsed.
+
+    Syntax was settled at decode; what remains needs the pipeline's ``TypeEnv``, which
+    the model layer has no access to — so this checks *meaning*, not form.
+    """
     errors: list[str] = []
-    t = TypeExpr.parse(declared)
+    t = declared
     # what this pipeline declared is the compiler's business...
     if not type_env.is_defined(t.base):
         errors.append(f"{where}: unknown type {t.base!r}")
@@ -133,8 +136,8 @@ def _check_field_refinement(structure: Structure, type_env: TypeEnv) -> list[str
     for f in structure.fields:
         if f.name not in inherited:
             continue
-        want = TypeExpr.parse(inherited[f.name])
-        got = TypeExpr.parse(f.type)
+        want = inherited[f.name]
+        got = f.type
         if not want.accepts(got):
             errors.append(
                 f"structure {structure.name!r} field {f.name!r}: {got.render()} does "
