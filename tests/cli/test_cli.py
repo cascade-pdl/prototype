@@ -79,7 +79,7 @@ def test_compile_writes_a_plan(project, tmp_path):
     out = tmp_path / "out.plan.json"
     assert main(["compile", str(project / "pipeline.yaml"), "-o", str(out)]) == 0
     raw = json.loads(out.read_text())
-    assert raw["version"] == 5
+    assert raw["version"] == 6
     assert raw["dag_outputs"], "compiled plan lost dag_outputs"
 
 

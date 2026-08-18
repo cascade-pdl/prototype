@@ -16,6 +16,11 @@ Consequently a binding is *static*: a node's output always lives at its own name
 relative to the dag's slot, so resolution needs the plan and the graph but no runtime
 results at all.
 
+Each binding carries the consuming port's declared ``encoding`` and ``depth``, taken
+straight from the signature: the store holds canonical JSON, so ``encoding`` tells the node
+what its *tool* wants on local disk, and ``depth`` is what lets it check that what arrived
+matches what was declared.
+
 **Dag outputs are aliases.** A dag's output port names an inner node's output, so the
 bytes are already in place and the location is derivable from the plan rather than
 recorded or copied. ``resolve_dag_output`` chases that chain (a dag exporting a dag
@@ -26,7 +31,6 @@ from __future__ import annotations
 from cascade.graph import Graph
 from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
-from cascade.model.types import DataFormat
 from cascade.plan.plan import Plan
 from cascade.plan.signature import Signature
 
@@ -103,7 +107,8 @@ def resolve_node(
         port = dep.as_ or dep.field
         if port is None:
             raise ResolveError(f"{node.name}: dependency on {dep.node!r} names no port")
-        if port not in signature.inputs:
+        declared = signature.inputs.get(port)
+        if declared is None:
             raise ResolveError(f"{node.name}: no input port {port!r}")
 
         if dep.is_input:
@@ -122,8 +127,8 @@ def resolve_node(
                 port=port,
                 scope=tuple(scope),
                 key=key,
-                encoding=_encoding_for(signature, port),
-                depth=signature.inputs[port].depth,
+                encoding=declared.encoding,
+                depth=declared.type.depth,
             )
         )
     return InputBindings(inputs=tuple(bindings))

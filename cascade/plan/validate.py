@@ -20,7 +20,7 @@ from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
 from cascade.plan.signature import Signature, TypeExpr
 from cascade.plan.type_env import TypeEnv
-from cascade.model.types import check_annotation
+from cascade.model.types import DataFormat, check_annotation
 from cascade.model.types import Structure
 from cascade.plan.elaborate import _NodeInfo, resolve_edge
 
@@ -34,6 +34,7 @@ def validate_edges(
     errors: list[str] = []
 
     errors += _check_reserved_names(pipeline)
+    errors += _check_encodings(pipeline)
 
     if type_env is not None:
         errors += _check_vocabulary(pipeline, type_env)
@@ -74,7 +75,9 @@ def validate_edges(
                 # a scattered port consumes one element of the supplied collection
                 if node.scatter == port and supplied.depth >= 1:
                     supplied = supplied.element()
-                expected = node_sig.inputs[port]
+                # .type, not the Port: encoding is node-local presentation and plays no
+                # part in compatibility -- the store is canonical JSON either way
+                expected = node_sig.inputs[port].type
                 if not expected.accepts(supplied):
                     errors.append(
                         f"{dag.name}.{node.name}: port {port!r} expects "
@@ -176,4 +179,26 @@ def _check_reserved_names(pipeline: Pipeline) -> list[str]:
         check(f"structure {structure.name!r}", [f.name for f in structure.fields])
         check("types", [structure.name])
 
+    return errors
+
+def _check_encodings(pipeline: Pipeline) -> list[str]:
+    """Only a *ref* may declare a non-JSON encoding.
+
+    The store holds canonical JSON for everything structured; ``encoding`` says what a
+    particular container wants on its local disk, and a dag is not a container — it
+    transcodes nothing. Silently ignoring an encoding on a dag port would leave an author
+    believing a conversion happens somewhere, so it is rejected instead.
+
+    This is also what unblocked persisting encodings at all: because a dag port has no
+    encoding, there is no alias chain to inherit one along.
+    """
+    errors: list[str] = []
+    for dag in pipeline.dags:
+        for port in dag.input:
+            if port.config.encoding is not DataFormat.json:
+                errors.append(
+                    f"dag {dag.name!r} input {port.name!r}: encoding "
+                    f"{port.config.encoding.value!r} is meaningless on a dag port — only a "
+                    "ref transcodes, and the store is canonical JSON"
+                )
     return errors

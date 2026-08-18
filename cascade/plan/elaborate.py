@@ -24,7 +24,7 @@ from cascade.model.refs import Ref
 from cascade.model.dag import Dag
 from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
-from cascade.plan.signature import Signature, TypeExpr
+from cascade.plan.signature import Port, Signature, TypeExpr
 
 
 class ElaborationError(Exception):
@@ -64,8 +64,8 @@ def elaborate(
 
 def _from_ref(ref: Ref) -> Signature:
     return Signature(
-        inputs={p.name: p.type for p in ref.input},
-        outputs={p.name: p.type for p in ref.output},
+        inputs={p.name: Port(p.type, p.config.encoding) for p in ref.input},
+        outputs={p.name: Port(p.type, p.config.encoding) for p in ref.output},
     )
 
 
@@ -83,11 +83,16 @@ def _from_dag(dag: Dag, graph: Graph[DagNode, Dependency], sigs: dict[str, Signa
         _check_merge(node, info[node.name].sig)
         _check_scatter(node, info, dag_inputs)
 
-    outputs: dict[str, TypeExpr] = {}
+    outputs: dict[str, Port] = {}
     for dep in dag.output:
-        outputs[dep.as_ or dep.field or dep.node] = resolve_edge(dep, info, dag_inputs)
+        # a dag never transcodes -- only a ref does -- so a dag port is canonical JSON.
+        # This is what unblocked persisting encodings: there is no alias to inherit along.
+        outputs[dep.as_ or dep.field or dep.node] = Port(resolve_edge(dep, info, dag_inputs))
 
-    return Signature(inputs=dag_inputs, outputs=outputs)
+    return Signature(
+        inputs={p.name: Port(p.type) for p in dag.input},
+        outputs=outputs,
+    )
 
 
 def resolve_edge(
@@ -117,7 +122,7 @@ def resolve_edge(
         (field,) = up.sig.outputs
     if field not in up.sig.outputs:
         raise ElaborationError(f"node {dep.node!r} has no output {field!r}")
-    t = up.sig.outputs[field]
+    t = up.sig.outputs[field].type
     if not up.fan:
         return t
     return t if up.merge == MERGE_FLATTEN else t.as_collection()
@@ -136,7 +141,8 @@ def _check_merge(node: DagNode, sig: Signature) -> None:
         )
     # flattening concatenates lane values, so each must itself be a collection;
     # flattening scalars would just be nesting under a misleading name
-    for port, t in sig.outputs.items():
+    for port, declared in sig.outputs.items():
+        t = declared.type
         if t.depth < 1:
             raise ElaborationError(
                 f"{node.name}: merge {MERGE_FLATTEN!r} needs collection outputs, but "

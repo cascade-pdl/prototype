@@ -13,7 +13,7 @@ from cascade.model.ref_data import RefDocker, RefEcho, RefSubprocess
 from cascade.model.runner_overrides import DockerOverride, RunnerOverrides
 from cascade.plan.run_config import RunConfig
 from cascade.engine.run_spec import RunSpec
-from cascade.plan.signature import Signature, TypeExpr
+from cascade.plan.signature import Port, Signature, TypeExpr
 from cascade.store.file_store import FileStore, FileConfig
 
 from cascade.engine.runner.registry import (
@@ -147,8 +147,8 @@ def test_resource_limits_reach_the_docker_command():
 def test_echo_takes_its_output_ports_from_the_signature():
     """Per-runnable, like the runner itself — nothing here varies per instance."""
     sig = Signature(
-        inputs={"d": TypeExpr.parse("Detection")},
-        outputs={"scored": TypeExpr.parse("Score"), "log": TypeExpr.parse("string")},
+        inputs={"d": Port(TypeExpr.parse("Detection"))},
+        outputs={"scored": Port(TypeExpr.parse("Score")), "log": Port(TypeExpr.parse("string"))},
     )
     runner = build_runner(
         RunConfig(runner=RunnerKind.echo, config=RefEcho(message="hi")),
@@ -163,7 +163,7 @@ def test_echo_without_a_signature_writes_nothing():
 
 
 def test_other_kinds_ignore_the_signature():
-    sig = Signature(inputs={}, outputs={"o": TypeExpr.parse("string")})
+    sig = Signature(inputs={}, outputs={"o": Port(TypeExpr.parse("string"))})
     runner = build_runner(
         RunConfig(runner=RunnerKind.docker, config=RefDocker(image="x:1")),
         signature=sig,
@@ -178,7 +178,7 @@ async def test_echo_writes_a_stub_for_each_output_port(tmp_path):
     store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main", "d")))
     runner = build_runner(
         RunConfig(runner=RunnerKind.echo, config=RefEcho(message="detected")),
-        signature=Signature(inputs={}, outputs={"dets": TypeExpr.parse("Detection[]")}),
+        signature=Signature(inputs={}, outputs={"dets": Port(TypeExpr.parse("Detection[]"))}),
     )
     rc = await runner.run(RunSpec(name="detect", run_id="r1", instance_id="r1/main/d", store_out=store))
     assert rc == 0
@@ -194,6 +194,6 @@ async def test_echo_writes_a_stub_for_each_output_port(tmp_path):
 async def test_echo_is_harmless_without_a_writer_store():
     runner = build_runner(
         RunConfig(runner=RunnerKind.echo, config=RefEcho()),
-        signature=Signature(inputs={}, outputs={"o": TypeExpr.parse("string")}),
+        signature=Signature(inputs={}, outputs={"o": Port(TypeExpr.parse("string"))}),
     )
     assert await runner.run(RunSpec(name="n", run_id="r")) == 0

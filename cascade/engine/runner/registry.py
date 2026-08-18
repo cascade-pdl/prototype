@@ -119,7 +119,7 @@ def _build_echo(
     return RunnerEcho(
         message=config.message,
         # port -> declared depth, so a T[] stub is a list
-        outputs={p: t.depth for p, t in signature.outputs.items()} if signature else {},
+        outputs={p: d.type.depth for p, d in signature.outputs.items()} if signature else {},
     )
 
 
