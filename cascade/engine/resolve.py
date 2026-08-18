@@ -32,7 +32,6 @@ from cascade.graph import Graph
 from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
 from cascade.plan.plan import Plan
-from cascade.plan.signature import Signature
 
 from cascade.engine.binding import InputBinding, InputBindings
 
@@ -132,9 +131,3 @@ def resolve_node(
             )
         )
     return InputBindings(inputs=tuple(bindings))
-
-
-def _encoding_for(signature: Signature, port: str) -> DataFormat:
-    """Port encodings are not persisted in ``Signature`` yet (item 1.3), so every
-    binding defaults to JSON. Isolated here so only this changes when 1.3 lands."""
-    return DataFormat.json
