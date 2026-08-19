@@ -8,6 +8,7 @@ nothing copied, and the store layout mirrors the dag.
 import pytest
 from yaml import safe_load
 
+from cascade.model.types import TypeExpr
 from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import compile_pipeline
 from cascade.engine.binding import InputBinding, InputBindings
@@ -72,7 +73,7 @@ def stores(tmp_path):
 
 def test_resolves_a_dag_input_edge(plan):
     graph = plan.node_graphs["main"]
-    dag_inputs = InputBindings(inputs=(InputBinding(port="src", scope=("$in",), key="src"),))
+    dag_inputs = InputBindings(inputs=(InputBinding(port="src", scope=("$in",), key="src", type=TypeExpr.parse("string")),))
     binding = resolve_node(graph.node("load"), plan, graph, dag_inputs).input_for("src")
     assert (binding.scope, binding.key) == (("$in",), "src")
 
@@ -127,7 +128,7 @@ def test_dag_runner_rejects_an_unknown_dag(plan):
 async def test_m1_two_node_dag_runs_end_to_end(plan, stores, tmp_path):
     # the dag's own input, as the executor will stage it
     stores.put_json("src", {"path": "moths.jpg"}, at=("$in",))
-    dag_inputs = InputBindings(inputs=(InputBinding(port="src", scope=("$in",), key="src"),))
+    dag_inputs = InputBindings(inputs=(InputBinding(port="src", scope=("$in",), key="src", type=TypeExpr.parse("string")),))
 
     code = await DagRunner("main", plan).run(
         RunSpec(
@@ -167,7 +168,7 @@ async def test_the_downstream_node_reads_the_upstream_output(plan, stores):
         RunSpec(
             name="main", run_id="r1", instance_id="r1/main", store_out=stores,
             inputs=InputBindings(
-                inputs=(InputBinding(port="src", scope=("$in",), key="src"),)
+                inputs=(InputBinding(port="src", scope=("$in",), key="src", type=TypeExpr.parse("string")),)
             ),
         )
     )
@@ -200,7 +201,7 @@ async def test_instance_paths_nest_under_the_dag(plan, stores):
         RunSpec(
             name="main", run_id="r1", instance_id="r1/main", store_out=stores,
             inputs=InputBindings(
-                inputs=(InputBinding(port="src", scope=("$in",), key="src"),)
+                inputs=(InputBinding(port="src", scope=("$in",), key="src", type=TypeExpr.parse("string")),)
             ),
         )
     )
@@ -269,7 +270,7 @@ async def test_m4_a_nested_dag_runs_by_recursion(nested_plan, tmp_path):
         RunSpec(
             name="main", run_id="r1", instance_id="r1/main", store_out=store,
             inputs=InputBindings(
-                inputs=(InputBinding(port="src", scope=("$in",), key="src"),)
+                inputs=(InputBinding(port="src", scope=("$in",), key="src", type=TypeExpr.parse("string")),)
             ),
         )
     )
@@ -298,7 +299,7 @@ async def test_a_subdag_node_resolves_its_input_through_the_alias(nested_plan, t
         RunSpec(
             name="main", run_id="r1", instance_id="r1/main", store_out=store,
             inputs=InputBindings(
-                inputs=(InputBinding(port="src", scope=("$in",), key="src"),)
+                inputs=(InputBinding(port="src", scope=("$in",), key="src", type=TypeExpr.parse("string")),)
             ),
         )
     )

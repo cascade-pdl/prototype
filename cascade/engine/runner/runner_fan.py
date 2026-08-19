@@ -83,11 +83,14 @@ class FanRunner(RunnerCoroBase):
     ) -> RunSpec:
         """One lane: every input bound as the node's own, except the scattered port,
         which points at that lane's staged element."""
+        source = self._scatter_binding(spec)
         scattered = InputBinding(
             port=self.scatter_port,
             scope=element_scope,
             key=self.scatter_port,
-            encoding=self._scatter_binding(spec).encoding,
+            # one element of the scattered collection: same config, one array level less
+            type=source.type.element() if source.type.depth > 0 else source.type,
+            config=source.config,
         )
         others = tuple(
             b for b in (spec.inputs or InputBindings()).inputs

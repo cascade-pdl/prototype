@@ -126,9 +126,8 @@ def resolve_node(
                 port=port,
                 scope=tuple(scope),
                 key=key,
-                encoding=declared.encoding,
-                depth=declared.type.depth,
-                type=declared.type.render(),
+                type=declared.type,
+                config=declared.config,
             )
         )
     return InputBindings(inputs=tuple(bindings))

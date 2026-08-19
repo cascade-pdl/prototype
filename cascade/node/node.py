@@ -1,18 +1,17 @@
 import json
 
 from cascade.engine.binding import InputBindings, OutputDecls
-from cascade.model.types import DataFormat
 from cascade.node.codec import decode, encode
 from cascade.store.base import Store
 
 
 import shutil
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Iterable, Mapping, Iterator
-from contextlib import contextmanager
+from typing import Any, Iterable, Iterator, Mapping
 
 from cascade.store.registry import decode as decode_store
 
@@ -83,10 +82,7 @@ class Node:
         binding = self._binding(port)
         target = self._staged(port)
         target.parent.mkdir(parents=True, exist_ok=True)
-        if binding.depth == 0 or binding.encoding is not DataFormat.json:
-            target.write_bytes(encode(self.read(port), binding.encoding))
-        else:
-            target.write_bytes(encode(self.read(port), DataFormat.json))
+        target.write_bytes(encode(self.read(port), binding.config.encoding))
         return target
 
     def dir(self, port: str, suffix: str = ".json") -> Path:
@@ -109,7 +105,7 @@ class Node:
         width = max(len(str(len(elements) - 1)), 1)
         for index, element in enumerate(elements):
             name = f"{index:0{width}d}{suffix}"
-            (target / name).write_bytes(encode(element, binding.encoding))
+            (target / name).write_bytes(encode(element, binding.config.encoding))
         return target
 
     # ----------------------------------------------------------------- outputs
@@ -126,10 +122,7 @@ class Node:
         """Take a file the tool produced and store it canonically."""
         decl = self._declared(port)
         raw = Path(path).read_bytes()
-        if decl.encoding is DataFormat.json and decl.depth == 0 and not decl.type:
-            self._out().put(decl.port, raw)
-        else:
-            self._out().put_json(decl.port, decode(raw, decl.encoding))
+        self._out().put_json(decl.port, decode(raw, decl.config.encoding))
         self._written.append(port)
 
     def write_dir(self, port: str, path: Path | str, pattern: str = "*") -> None:
@@ -142,7 +135,9 @@ class Node:
         files = sorted(p for p in Path(path).glob(pattern) if p.is_file())
         if not files:
             raise NodeError(f"port {port!r}: no files matching {pattern!r} under {path}")
-        self._out().put_json(decl.port, [decode(f.read_bytes(), decl.encoding) for f in files])
+        self._out().put_json(
+            decl.port, [decode(f.read_bytes(), decl.config.encoding) for f in files]
+        )
         self._written.append(port)
 
     def write_collection(self, port: str, items: Iterable[Any]) -> None:
@@ -160,7 +155,9 @@ class Node:
         for index, item in enumerate(items):
             store.put_json("element", item, at=(*holder, str(index)))
             elements.append(((*holder, str(index)), "element"))
-        store.write_collection(decl.port, elements, element_type=decl.type or None)
+        store.write_collection(
+            decl.port, elements, element_type=decl.type.render() or None
+        )
         self._written.append(port)
 
     # --------------------------------------------------------------- lifecycle
@@ -243,7 +240,7 @@ class Node:
         return False
 
 
-def from_env(env: dict[str, str]) -> Node:
+def from_env(env: Mapping[str, str]) -> Node:
     """Build a ``Node`` from the environment.
 
     The whole contract in one call: no arguments, because everything comes from the env the
@@ -266,20 +263,20 @@ def from_env(env: dict[str, str]) -> Node:
         store_out=decode_store(json.loads(writer)) if writer else None,
     )
 
- 
+
 @contextmanager
 def session(env: Mapping[str, str]) -> Iterator[Node]:
     """A node with its lifecycle made visible at the call site.
- 
+
     ``from_env`` reads like the pure constructor it is, which conceals the fact that
     *leaving* the block has a side effect: the completion marker is written on a clean
     exit and deliberately not written on failure. ``session`` says so in its name.
- 
+
     It also returns a context manager rather than a ``Node``, so ``n = session(env)``
     fails at once instead of quietly producing a node that never marks itself done — the
     misuse ``from_env`` cannot protect against, because inspecting a node without a
     lifecycle is legitimate.
- 
+
     Exception semantics come free from delegating to ``Node`` rather than reimplementing
     them: an error in the caller's body is thrown in at the ``yield``, propagates out of
     ``with node``, and ``__exit__`` sees it and skips the marker.

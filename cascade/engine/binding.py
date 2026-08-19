@@ -32,10 +32,10 @@ These cross into containers via env, so everything here is JSON-encodable.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from cascade.model.types import DataFormat
+from cascade.model.types import DataFormat, IoConfig, TypeExpr
 
 
 @dataclass(frozen=True)
@@ -45,18 +45,25 @@ class InputBinding:
     port: str
     scope: tuple[str, ...]
     key: str
-    encoding: DataFormat = DataFormat.json
-    depth: int = 0
-    type: str = ""  # rendered TypeExpr, for validation and codec coercion
+    type: TypeExpr
+    config: IoConfig = field(default_factory=IoConfig)
+
+    @property
+    def encoding(self) -> DataFormat:
+        return self.config.encoding
+
+    @property
+    def depth(self) -> int:
+        """Derived, never stored: two fields that can disagree is one too many."""
+        return self.type.depth
 
     def encode(self) -> dict[str, Any]:
         return {
             "port": self.port,
             "scope": list(self.scope),
             "key": self.key,
-            "encoding": self.encoding.value,
-            "depth": self.depth,
-            "type": self.type,
+            "type": self.type.encode(),
+            "config": self.config.encode(),
         }
 
     @classmethod
@@ -65,9 +72,8 @@ class InputBinding:
             port=raw["port"],
             scope=tuple(raw["scope"]),
             key=raw["key"],
-            encoding=DataFormat(raw.get("encoding", DataFormat.json.value)),
-            depth=raw.get("depth", 0),
-            type=raw.get("type", ""),
+            type=TypeExpr.decode(raw["type"]),
+            config=IoConfig.decode(raw.get("config", {})),
         )
 
 
@@ -82,25 +88,30 @@ class OutputDecl:
     """
 
     port: str
-    encoding: DataFormat = DataFormat.json
-    depth: int = 0
-    type: str = ""  # rendered TypeExpr, for validation and codec coercion
+    type: TypeExpr
+    config: IoConfig = field(default_factory=IoConfig)
+
+    @property
+    def encoding(self) -> DataFormat:
+        return self.config.encoding
+
+    @property
+    def depth(self) -> int:
+        return self.type.depth
 
     def encode(self) -> dict[str, Any]:
         return {
             "port": self.port,
-            "encoding": self.encoding.value,
-            "depth": self.depth,
-            "type": self.type,
+            "type": self.type.encode(),
+            "config": self.config.encode(),
         }
 
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> "OutputDecl":
         return cls(
             port=raw["port"],
-            encoding=DataFormat(raw.get("encoding", DataFormat.json.value)),
-            depth=raw.get("depth", 0),
-            type=raw.get("type", ""),
+            type=TypeExpr.decode(raw["type"]),
+            config=IoConfig.decode(raw.get("config", {})),
         )
 
 

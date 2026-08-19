@@ -9,6 +9,7 @@ import asyncio
 import pytest
 
 from cascade.engine.binding import InputBinding, InputBindings
+from cascade.model.types import TypeExpr
 from cascade.engine.run_spec import RunSpec
 from cascade.engine.runner.runner_coro import RunnerCoro
 from cascade.engine.runner.runner_fan import FanError, FanRunner
@@ -27,7 +28,8 @@ def _fan_setup(tmp_path, elements, outputs={"out": ((), "out")}):
         name="detect", run_id="r1", node_id="det", instance_id="r1/main/det",
         store_in=reader, store_out=writer,
         inputs=InputBindings(
-            inputs=(InputBinding(port="number", scope=("src",), key="numbers"),)
+            inputs=(InputBinding(port="number", scope=("src",), key="numbers",
+                                 type=TypeExpr.parse("int[]")),)
         ),
     )
     return spec, reader, writer

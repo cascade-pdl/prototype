@@ -9,8 +9,9 @@ import json
 
 from yaml import safe_load
 
+from cascade.model.types import TypeExpr
 from cascade.model.pipeline import Pipeline
-from cascade.model.types import DataFormat, TypeExpr
+from cascade.model.types import DataFormat, IoConfig
 from cascade.plan.compile import check, compile_pipeline
 from cascade.plan.plan import Plan
 from cascade.plan.signature import Port, Signature
@@ -59,15 +60,15 @@ def test_a_port_defaults_to_json():
 
 
 def test_port_round_trips():
-    port = Port(TypeExpr.parse("Detection[]"), DataFormat.csv)
+    port = Port(TypeExpr.parse("Detection[]"), IoConfig(DataFormat.csv))
     assert Port.decode(port.encode()) == port
 
 
 def test_encoding_is_not_part_of_type_compatibility():
     """Two ports differing only in encoding are compatible: the store is canonical JSON
     either way, so encoding is presentation, not contract."""
-    a = Port(TypeExpr.parse("Detection[]"), DataFormat.csv)
-    b = Port(TypeExpr.parse("Detection[]"), DataFormat.json)
+    a = Port(TypeExpr.parse("Detection[]"), IoConfig(DataFormat.csv))
+    b = Port(TypeExpr.parse("Detection[]"), IoConfig(DataFormat.json))
     assert a.type.accepts(b.type)
     assert b.type.accepts(a.type)
 
@@ -111,8 +112,9 @@ def test_the_encoding_crosses_into_the_container():
     bindings = resolve_node(graph.node("s"), plan, graph, InputBindings())
     env = to_env(RunSpec(name="score", run_id="r1", inputs=bindings))
     (wire,) = json.loads(env["CASCADE_INPUTS"])
-    assert wire["encoding"] == "csv"
-    assert wire["depth"] == 1
+    # config travels whole, so mapping and a future transform arrive without plumbing
+    assert wire["config"]["encoding"] == "csv"
+    assert wire["type"] == "Detection[]"
 
 
 def test_a_json_port_still_says_so_explicitly():
@@ -138,6 +140,6 @@ def test_signature_can_be_built_directly_from_ports():
     """The shape the registry and tests construct by hand."""
     sig = Signature(
         inputs={"a": Port(TypeExpr.parse("float"))},
-        outputs={"b": Port(TypeExpr.parse("float[]"), DataFormat.csv)},
+        outputs={"b": Port(TypeExpr.parse("float[]"), IoConfig(DataFormat.csv))},
     )
     assert Signature.decode(sig.encode()) == sig

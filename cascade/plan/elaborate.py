@@ -64,8 +64,8 @@ def elaborate(
 
 def _from_ref(ref: Ref) -> Signature:
     return Signature(
-        inputs={p.name: Port(p.type, p.config.encoding) for p in ref.input},
-        outputs={p.name: Port(p.type, p.config.encoding) for p in ref.output},
+        inputs={p.name: Port(p.type, p.config) for p in ref.input},
+        outputs={p.name: Port(p.type, p.config) for p in ref.output},
     )
 
 

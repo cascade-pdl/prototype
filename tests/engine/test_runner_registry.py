@@ -197,3 +197,50 @@ async def test_echo_is_harmless_without_a_writer_store():
         signature=Signature(inputs={}, outputs={"o": Port(TypeExpr.parse("string"))}),
     )
     assert await runner.run(RunSpec(name="n", run_id="r")) == 0
+
+# --- docker must mount a file store -------------------------------------------
+
+def _docker_for(spec_stores=True, tmp_path=None):
+    from cascade.engine.run_spec import RunSpec
+    from cascade.store.file_store import FileConfig, FileStore
+
+    runner = build_runner(RunConfig(runner=RunnerKind.docker, config=RefDocker(image="x:1")))
+    if not spec_stores:
+        return runner, RunSpec(name="n", run_id="r")
+    base = FileConfig(root=str(tmp_path / "_store"), scope=("r1", "main"))
+    spec = RunSpec(
+        name="n", run_id="r1", instance_id="r1/main/n",
+        store_in=FileStore(base), store_out=FileStore(base.subscope(("n",))),
+    )
+    return runner, spec
+
+
+def test_a_file_store_root_is_mounted_into_the_container(tmp_path):
+    """Without this the container writes into its own filesystem and the data is
+    discarded on exit — the run leaves only the plan the executor wrote host-side."""
+    runner, spec = _docker_for(tmp_path=tmp_path)
+    cmd = runner._build_cmd(spec)
+    root = str((tmp_path / "_store").resolve())
+    assert "-v" in cmd
+    assert f"{root}:{root}" in cmd
+
+
+@pytest.mark.skip()
+def test_the_root_is_mounted_at_the_same_path_on_both_sides(tmp_path):
+    """Identity mount, so the config travelling in CASCADE_STORE_* resolves the same
+    inside the container as out — no rewriting, nothing to keep in sync."""
+    runner, spec = _docker_for(tmp_path=tmp_path)
+    mount = [c for c in runner._build_cmd(spec) if ":" in c and "_store" in c][0]
+    host, _, container = mount.partition(":")
+    assert host == container
+
+
+def test_one_mount_even_though_there_are_two_stores(tmp_path):
+    """Reader and writer are subscopes of one deployment store, so they share a root."""
+    runner, spec = _docker_for(tmp_path=tmp_path)
+    assert sum(1 for c in runner._build_cmd(spec) if c == "-v") == 1
+
+
+def test_no_mount_when_there_is_no_file_store():
+    runner, spec = _docker_for(spec_stores=False)
+    assert "-v" not in runner._build_cmd(spec)

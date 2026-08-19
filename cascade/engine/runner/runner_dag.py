@@ -123,12 +123,7 @@ class DagRunner(RunnerCoroBase):
         signature = self.plan.signatures.get(node.runnable_name)
         declared = OutputDecls(
             outputs=tuple(
-                OutputDecl(
-                    port=port,
-                    encoding=port_decl.encoding,
-                    depth=port_decl.type.depth,
-                    type=port_decl.type.render(),
-                )
+                OutputDecl(port=port, type=port_decl.type, config=port_decl.config)
                 for port, port_decl in (signature.outputs.items() if signature else ())
             )
         )

@@ -16,8 +16,9 @@ from cascade.engine.binding import (
     OutputDecls,
 )
 from cascade.engine.run_spec import RunSpec, to_env
-from cascade.model.types import DataFormat
-from cascade.node.node import NodeError, from_env, DONE_MARKER
+from cascade.model.types import DataFormat, TypeExpr
+from cascade.node.node import DONE_MARKER
+from cascade.node import Node, NodeError, from_env, session
 from cascade.node.codec import CodecError, decode, encode
 from cascade.store.file_store import FileConfig, FileStore
 
@@ -40,9 +41,9 @@ def spec(stores):
         store_in=reader,
         store_out=writer,
         inputs=InputBindings(
-            (InputBinding("images", ("list",), "images", DataFormat.json, 1, "Image[]"),)
+            (InputBinding("images", ("list",), "images", TypeExpr.parse("Image[]")),)
         ),
-        outputs=OutputDecls((OutputDecl("dets", DataFormat.json, 1, "Detection[]"),)),
+        outputs=OutputDecls((OutputDecl("dets", TypeExpr.parse("Detection[]")),)),
         args={"threshold": 0.4},
     )
 
@@ -63,6 +64,8 @@ def env(spec, tmp_path) -> dict[str, str]:
     """
     return _env(spec, tmp_path)
 
+
+# --- the env contract ---------------------------------------------------------
 
 def test_a_node_is_built_entirely_from_the_environment(env):
     n = from_env(env)
@@ -142,7 +145,7 @@ def test_path_stages_a_single_value(spec, stores, tmp_path):
     reader, _ = stores
     reader.put_json("images", {"only": "one"}, at=("list",))
     spec.inputs = InputBindings(
-        (InputBinding("images", ("list",), "images", DataFormat.json, 0, "Image"),)
+        (InputBinding("images", ("list",), "images", TypeExpr.parse("Image")),)
     )
     n = from_env(_env(spec, tmp_path))
     assert json.loads(n.path("images").read_text()) == {"only": "one"}
@@ -152,7 +155,7 @@ def test_dir_refuses_a_scalar_port(spec, stores, tmp_path):
     reader, _ = stores
     reader.put_json("images", {"only": "one"}, at=("list",))
     spec.inputs = InputBindings(
-        (InputBinding("images", ("list",), "images", DataFormat.json, 0, "Image"),)
+        (InputBinding("images", ("list",), "images", TypeExpr.parse("Image")),)
     )
     n = from_env(_env(spec, tmp_path))
     with pytest.raises(NodeError, match="not a collection"):
@@ -269,3 +272,39 @@ def test_csv_refuses_a_scalar():
 
 def test_an_empty_csv_round_trips_to_an_empty_list():
     assert decode(encode([], DataFormat.csv), DataFormat.csv) == []
+
+# --- session ------------------------------------------------------------------
+
+def test_session_returns_a_context_manager_not_a_node(env):
+    """The point of `session` over `from_env`: `n = session(env)` cannot be mistaken for
+    a node, so the lifecycle cannot be skipped by accident."""
+    handle = session(env)
+    assert not isinstance(handle, Node)
+    assert hasattr(handle, "__enter__")
+
+
+def test_session_writes_the_marker_on_a_clean_exit(stores, env):
+    _, writer = stores
+    with session(env) as n:
+        n.write("dets", [{"conf": 0.9}])
+    assert writer.has(DONE_MARKER)
+
+
+def test_session_skips_the_marker_when_the_body_raises(stores, env):
+    """Exception semantics are delegated to `Node`, not reimplemented: the error is
+    thrown in at the yield and propagates out of `with node`."""
+    _, writer = stores
+    with pytest.raises(RuntimeError, match="crashed"):
+        with session(env) as n:
+            n.write("dets", [])
+            raise RuntimeError("model crashed")
+    assert writer.has("dets")
+    assert not writer.has(DONE_MARKER)
+
+
+def test_session_accepts_os_environ(spec, tmp_path):
+    """`os.environ` is an `os._Environ`, not a dict — which is why the signature is
+    Mapping. Every production call site passes exactly this type."""
+    import os
+
+    assert isinstance(from_env(os.environ), Node)

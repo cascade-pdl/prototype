@@ -6,6 +6,7 @@ structural.
 """
 import json
 
+from cascade.model.types import TypeExpr
 from cascade.engine.run_spec import RunSpec, to_env
 from cascade.engine.binding import InputBinding, InputBindings
 from cascade.store.file_store import FileStore, FileConfig
@@ -50,7 +51,7 @@ def test_the_two_stores_are_emitted_separately(tmp_path):
 
 
 def test_inputs_are_emitted_and_round_trip():
-    bindings = InputBindings(inputs=(InputBinding(port="dets", scope=("d",), key="dets"),))
+    bindings = InputBindings(inputs=(InputBinding(port="dets", scope=("d",), key="dets", type=TypeExpr.parse("Detection[]")),))
     env = to_env(RunSpec(name="n", run_id="r", inputs=bindings))
     assert InputBindings.decode(json.loads(env["CASCADE_INPUTS"])) == bindings
 
@@ -78,7 +79,7 @@ def test_every_value_is_a_string(tmp_path):
             run_id="r",
             store_in=_store(tmp_path, "r"),
             store_out=_store(tmp_path, "r", "a"),
-            inputs=InputBindings(inputs=(InputBinding(port="p", scope=("d",), key="k"),)),
+            inputs=InputBindings(inputs=(InputBinding(port="p", scope=("d",), key="k", type=TypeExpr.parse("string")),)),
             args={"n": 1},
         )
     )

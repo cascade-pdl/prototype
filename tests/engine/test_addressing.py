@@ -5,9 +5,10 @@ renderings: a tuple for ``StoreConfig.subscope`` and a string for logs.
 """
 import pytest
 
+from cascade.model.types import TypeExpr
 from cascade.engine.instance_path import InstancePath
-from cascade.engine.binding import InputBinding, InputBindings
-from cascade.model.types import DataFormat
+from cascade.engine.binding import InputBinding, InputBindings, OutputDecl
+from cascade.model.types import DataFormat, IoConfig
 
 
 # --- InstancePath ------------------------------------------------------------
@@ -86,8 +87,8 @@ def test_descending_does_not_mutate_the_parent():
 def test_bindings_locate_inputs_in_sibling_scopes():
     bindings = InputBindings(
         inputs=(
-            InputBinding(port="dets", scope=("d",), key="dets", encoding=DataFormat.csv),
-            InputBinding(port="cfg", scope=("$input",), key="cfg"),
+            InputBinding(port="dets", scope=("d",), key="dets", type=TypeExpr.parse("Detection[]"), config=IoConfig(DataFormat.csv)),
+            InputBinding(port="cfg", scope=("$input",), key="cfg", type=TypeExpr.parse("string")),
         ),
     )
     assert bindings.ports == ("dets", "cfg")
@@ -99,7 +100,7 @@ def test_bindings_locate_inputs_in_sibling_scopes():
 
 def test_bindings_round_trip_as_json():
     bindings = InputBindings(
-        inputs=(InputBinding(port="d", scope=("$input",), key="dets", encoding=DataFormat.csv),),
+        inputs=(InputBinding(port="d", scope=("$input",), key="dets", type=TypeExpr.parse("Detection"), config=IoConfig(DataFormat.csv)),),
     )
     assert InputBindings.decode(bindings.encode()) == bindings
 
@@ -113,12 +114,16 @@ def test_encoded_bindings_are_json_serialisable():
     """They cross into containers via env, so they must survive json.dumps."""
     import json
 
-    bindings = InputBindings(inputs=(InputBinding(port="p", scope=("d",), key="k"),))
+    bindings = InputBindings(inputs=(InputBinding(port="p", scope=("d",), key="k", type=TypeExpr.parse("string")),))
     assert InputBindings.decode(json.loads(json.dumps(bindings.encode()))) == bindings
 
 
-def test_bindings_carry_no_output_information():
-    """Outputs are signature data, not per-instance data: every instance of a
-    runnable writes the same ports, and where they land is fixed by store_out."""
-    assert not hasattr(InputBindings(), "output_scope")
-    assert not hasattr(InputBinding(port="p", scope=(), key="k"), "output_scope")
+def test_bindings_carry_no_output_location():
+    """An input needs a location because it points outside its own slot; an output does
+    not, because `store_out` is already scoped to that slot. An earlier version paired
+    them in one class with an `output_scope`, which held two incompatible frames of
+    reference — so this pins that it stays gone."""
+    binding = InputBinding(port="p", scope=(), key="k", type=TypeExpr.parse("string"))
+    assert not hasattr(binding, "output_scope")
+    assert not hasattr(OutputDecl(port="p", type=TypeExpr.parse("string")), "scope")
+    assert not hasattr(OutputDecl(port="p", type=TypeExpr.parse("string")), "key")

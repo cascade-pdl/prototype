@@ -5,10 +5,10 @@ bindings; the node reads those bindings to load and store data procedurally.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from cascade.model.types import DataFormat, TypeError_, TypeExpr
+from cascade.model.types import IoConfig, TypeError_, TypeExpr
 
 __all__ = ["Port", "Signature", "TypeExpr", "TypeError_"]  # re-exported: callers import both
 
@@ -17,11 +17,16 @@ __all__ = ["Port", "Signature", "TypeExpr", "TypeError_"]  # re-exported: caller
 class Port:
     """A resolved port: what flows through it, and what the *container* wants it as.
 
-    The two are separate concerns and deliberately not comparable together. The store
-    holds canonical JSON for everything structured, so ``encoding`` says only what a
-    particular tool expects on its local disk — which means two ports with different
-    encodings are perfectly compatible, and encoding must play no part in type
-    compatibility.
+    ``config`` is carried **whole** rather than having its fields cherry-picked. An earlier
+    version copied only ``encoding``, which is how ``mapping`` came to be silently dropped
+    at compile time: adding a field to ``IoConfig`` then meant editing four types and
+    remembering every one. Carrying the object means ``mapping`` and a future ``transform``
+    arrive for free.
+
+    Type and config are deliberately not comparable together. The store holds canonical
+    JSON for everything structured, so ``encoding`` says only what a particular tool expects
+    on its local disk — two ports with different encodings are perfectly compatible, and
+    nothing in ``config`` may play a part in type compatibility.
 
     That is why ``accepts`` stays on ``TypeExpr`` rather than moving here: a comparison
     site has to reach for ``.type`` explicitly, so it cannot accidentally start comparing
@@ -30,16 +35,21 @@ class Port:
     """
 
     type: TypeExpr
-    encoding: DataFormat = DataFormat.json
+    config: IoConfig = field(default_factory=IoConfig)
+
+    @property
+    def encoding(self):
+        """Convenience: the encoding is the field of ``config`` read most often."""
+        return self.config.encoding
 
     def encode(self) -> dict[str, Any]:
-        return {"type": self.type.encode(), "encoding": self.encoding.value}
+        return {"type": self.type.encode(), "config": self.config.encode()}
 
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> "Port":
         return cls(
             type=TypeExpr.decode(raw["type"]),
-            encoding=DataFormat(raw.get("encoding", DataFormat.json.value)),
+            config=IoConfig.decode(raw.get("config", {})),
         )
 
 

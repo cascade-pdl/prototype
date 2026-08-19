@@ -132,9 +132,18 @@ class Executor:
             )
         for port, value in inputs.items():
             dag_store.put_json(port, value, at=(RUN_INPUTS,))
+        # the entrypoint's own signature is right here, so a run input is bound with its
+        # declared type and config rather than a placeholder
         return InputBindings(
             inputs=tuple(
-                InputBinding(port=port, scope=(RUN_INPUTS,), key=port) for port in inputs
+                InputBinding(
+                    port=port,
+                    scope=(RUN_INPUTS,),
+                    key=port,
+                    type=declared[port].type,
+                    config=declared[port].config,
+                )
+                for port in inputs
             )
         )
 
