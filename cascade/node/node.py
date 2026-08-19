@@ -11,7 +11,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping, Iterator
+from contextlib import contextmanager
 
 from cascade.store.registry import decode as decode_store
 
@@ -264,3 +265,25 @@ def from_env(env: dict[str, str]) -> Node:
         store_in=decode_store(json.loads(reader)) if reader else None,
         store_out=decode_store(json.loads(writer)) if writer else None,
     )
+
+ 
+@contextmanager
+def session(env: Mapping[str, str]) -> Iterator[Node]:
+    """A node with its lifecycle made visible at the call site.
+ 
+    ``from_env`` reads like the pure constructor it is, which conceals the fact that
+    *leaving* the block has a side effect: the completion marker is written on a clean
+    exit and deliberately not written on failure. ``session`` says so in its name.
+ 
+    It also returns a context manager rather than a ``Node``, so ``n = session(env)``
+    fails at once instead of quietly producing a node that never marks itself done — the
+    misuse ``from_env`` cannot protect against, because inspecting a node without a
+    lifecycle is legitimate.
+ 
+    Exception semantics come free from delegating to ``Node`` rather than reimplementing
+    them: an error in the caller's body is thrown in at the ``yield``, propagates out of
+    ``with node``, and ``__exit__`` sees it and skips the marker.
+    """
+    node = from_env(env)
+    with node:
+        yield node

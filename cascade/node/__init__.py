@@ -28,7 +28,7 @@ tools also argue against scattering them: one invocation over N images beats N m
 """
 
 from cascade.node.codec import encode, decode, CodecError
-from cascade.node.node import NodeError, Node, from_env
+from cascade.node.node import NodeError, Node, from_env, session
 
 
 __all__ = [
@@ -38,4 +38,5 @@ __all__ = [
     "CodecError",
     "Node",
     "from_env",
+    "session",
 ]
