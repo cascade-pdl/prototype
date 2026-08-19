@@ -2,19 +2,16 @@
 
 Reads nothing, writes one port. ``count`` comes from the dag node's ``args``.
 """
-import sys
-from pathlib import Path
+import os
 
-sys.path.insert(0, str(Path(__file__).parent))
-from nodeio import context
+import cascade.node as cn
 
 
 def main() -> int:
-    ctx = context()
-    count = int(ctx.args.get("count", 10))
-    numbers = list(range(count))
-    ctx.log(f"emitting {count} integers")
-    ctx.write("numbers", numbers)
+    with cn.from_env(os.environ) as n:
+        count = int(n.args.get("count", 10))
+        n.log(f"emitting {count} integers")
+        n.write("numbers", list(range(count)))
     return 0
 
 

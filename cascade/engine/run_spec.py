@@ -1,8 +1,9 @@
 """``RunSpec`` — everything handed to one spawn, and its env projection.
 
 The spec carries four kinds of thing: *identity* (run, node, instance), *stores*,
-*input bindings*, and *args*. There is no output binding: output ports live in the
-plan's ``Signature`` and their location is already fixed by ``store_out``'s scope.
+*bindings*, and *args*. Inputs carry a location because it varies per instance; outputs
+carry only identity and encoding, because ``store_out``'s scope already fixes where they
+go — but the node cannot see the plan, so which ports exist still has to travel.
 
 The env projection is the wire format for containers; an in-process runner reads the
 spec directly instead.
@@ -21,7 +22,7 @@ from typing import Any
 from cascade.store.base import Store
 from cascade.store.registry import encode
 
-from cascade.engine.binding import InputBindings
+from cascade.engine.binding import InputBindings, OutputDecls
 
 
 @dataclass
@@ -33,6 +34,7 @@ class RunSpec:
     store_in: Store | None = None  # dag-scoped: sibling outputs are visible
     store_out: Store | None = None  # instance-scoped: this slot only
     inputs: InputBindings | None = None
+    outputs: OutputDecls | None = None
     args: dict[str, Any] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
 
@@ -45,6 +47,8 @@ def to_env(spec: RunSpec) -> dict[str, str]:
         env["CASCADE_STORE_OUT"] = json.dumps(encode(spec.store_out))
     if spec.inputs is not None:
         env["CASCADE_INPUTS"] = json.dumps(spec.inputs.encode())
+    if spec.outputs is not None:
+        env["CASCADE_OUTPUTS"] = json.dumps(spec.outputs.encode())
     if spec.args:
         env["CASCADE_ARGS"] = json.dumps(spec.args)
     env["CASCADE_RUN_SPEC"] = json.dumps(

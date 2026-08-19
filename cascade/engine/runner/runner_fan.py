@@ -101,6 +101,7 @@ class FanRunner(RunnerCoroBase):
             store_in=spec.store_in,
             store_out=_store_at(spec.store_out, (str(index),)),
             inputs=InputBindings(inputs=(*others, scattered)),
+            outputs=spec.outputs,  # every lane declares what the node declares
             args=dict(spec.args),
         )
 

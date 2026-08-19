@@ -35,7 +35,7 @@ from cascade.plan.plan import Plan
 from cascade.store.base import Store
 from cascade.store.registry import from_config
 
-from cascade.engine.binding import InputBindings
+from cascade.engine.binding import InputBindings, OutputDecl, OutputDecls
 from cascade.engine.instance_path import InstancePath
 from cascade.engine.resolve import ResolveError, resolve_dag_output, resolve_node
 from cascade.engine.run_spec import RunSpec
@@ -120,6 +120,18 @@ class DagRunner(RunnerCoroBase):
         reader = spec.store_out
         writer = _store_at(spec.store_out, (node.name,)) if spec.store_out else None
 
+        signature = self.plan.signatures.get(node.runnable_name)
+        declared = OutputDecls(
+            outputs=tuple(
+                OutputDecl(
+                    port=port,
+                    encoding=port_decl.encoding,
+                    depth=port_decl.type.depth,
+                    type=port_decl.type.render(),
+                )
+                for port, port_decl in (signature.outputs.items() if signature else ())
+            )
+        )
         child = RunSpec(
             name=node.runnable_name,
             run_id=spec.run_id,
@@ -128,6 +140,7 @@ class DagRunner(RunnerCoroBase):
             store_in=reader,
             store_out=writer,
             inputs=bindings,
+            outputs=declared,
             args=dict(node.args),
         )
         runner = self._runner_for(node.runnable_name)

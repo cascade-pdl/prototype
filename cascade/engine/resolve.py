@@ -128,6 +128,7 @@ def resolve_node(
                 key=key,
                 encoding=declared.encoding,
                 depth=declared.type.depth,
+                type=declared.type.render(),
             )
         )
     return InputBindings(inputs=tuple(bindings))

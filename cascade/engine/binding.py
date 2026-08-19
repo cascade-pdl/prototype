@@ -47,6 +47,7 @@ class InputBinding:
     key: str
     encoding: DataFormat = DataFormat.json
     depth: int = 0
+    type: str = ""  # rendered TypeExpr, for validation and codec coercion
 
     def encode(self) -> dict[str, Any]:
         return {
@@ -55,6 +56,7 @@ class InputBinding:
             "key": self.key,
             "encoding": self.encoding.value,
             "depth": self.depth,
+            "type": self.type,
         }
 
     @classmethod
@@ -65,7 +67,62 @@ class InputBinding:
             key=raw["key"],
             encoding=DataFormat(raw.get("encoding", DataFormat.json.value)),
             depth=raw.get("depth", 0),
+            type=raw.get("type", ""),
         )
+
+
+@dataclass(frozen=True)
+class OutputDecl:
+    """One output port, as the node needs to know it.
+
+    Not a binding: an output needs no *location*, because the writer store is already
+    scoped to this instance's slot. What the node cannot work out for itself is which
+    ports exist and what encoding each wants — it has no access to the plan — so that
+    much has to travel. Identity and encoding, never scope or key.
+    """
+
+    port: str
+    encoding: DataFormat = DataFormat.json
+    depth: int = 0
+    type: str = ""  # rendered TypeExpr, for validation and codec coercion
+
+    def encode(self) -> dict[str, Any]:
+        return {
+            "port": self.port,
+            "encoding": self.encoding.value,
+            "depth": self.depth,
+            "type": self.type,
+        }
+
+    @classmethod
+    def decode(cls, raw: dict[str, Any]) -> "OutputDecl":
+        return cls(
+            port=raw["port"],
+            encoding=DataFormat(raw.get("encoding", DataFormat.json.value)),
+            depth=raw.get("depth", 0),
+            type=raw.get("type", ""),
+        )
+
+
+@dataclass(frozen=True)
+class OutputDecls:
+    """The declared outputs for one instance."""
+
+    outputs: tuple[OutputDecl, ...] = ()
+
+    def decl_for(self, port: str) -> OutputDecl | None:
+        return next((o for o in self.outputs if o.port == port), None)
+
+    @property
+    def ports(self) -> tuple[str, ...]:
+        return tuple(o.port for o in self.outputs)
+
+    def encode(self) -> list[dict[str, Any]]:
+        return [o.encode() for o in self.outputs]
+
+    @classmethod
+    def decode(cls, raw: list[dict[str, Any]]) -> "OutputDecls":
+        return cls(outputs=tuple(OutputDecl.decode(o) for o in raw or ()))
 
 
 @dataclass(frozen=True)

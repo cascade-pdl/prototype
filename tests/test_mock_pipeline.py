@@ -5,6 +5,7 @@ files, the node-side contract exercised for real rather than through `RunnerEcho
 is also the honest record of where the executor currently stops — the scattered variant
 asserts the *designed* failure rather than pretending to pass.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -42,6 +43,18 @@ def _plan(path: Path):
     pipeline = Pipeline.decode(safe_load(path.read_text()))
     assert check(pipeline) == []
     return compile_pipeline(pipeline)
+
+
+@pytest.fixture(autouse=True)
+def _dev_tree_importable(monkeypatch):
+    """Make `cascade` importable in subprocess refs when running from the source tree.
+
+    `PYTHONPATH=.` does not survive: a ref's relative command resolves against the
+    pipeline's directory, so the child's cwd differs from the parent's and a relative
+    entry points somewhere else entirely.
+    """
+    existing = os.environ.get("PYTHONPATH", "")
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, [str(ROOT), existing])))
 
 
 def _with_this_interpreter(plan):
@@ -111,7 +124,12 @@ async def test_the_store_layout_mirrors_the_dag(tmp_path):
         for p in tmp_path.rglob("*")
         if p.is_file()
     )
-    assert written == ["mock/r1/main/det/detections", "mock/r1/main/src/numbers"]
+    assert written == [
+        "mock/r1/main/det/$done",
+        "mock/r1/main/det/detections",
+        "mock/r1/main/src/$done",
+        "mock/r1/main/src/numbers",
+    ]
 
 
 @pytest.mark.asyncio
