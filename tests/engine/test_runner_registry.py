@@ -218,21 +218,40 @@ def _docker_for(spec_stores=True, tmp_path=None):
 def test_a_file_store_root_is_mounted_into_the_container(tmp_path):
     """Without this the container writes into its own filesystem and the data is
     discarded on exit — the run leaves only the plan the executor wrote host-side."""
+    from cascade.engine.runner.runner_docker import CONTAINER_STORE_ROOT
+
     runner, spec = _docker_for(tmp_path=tmp_path)
     cmd = runner._build_cmd(spec)
     root = str((tmp_path / "_store").resolve())
     assert "-v" in cmd
-    assert f"{root}:{root}" in cmd
+    assert f"{root}:{CONTAINER_STORE_ROOT}" in cmd
 
 
-@pytest.mark.skip()
-def test_the_root_is_mounted_at_the_same_path_on_both_sides(tmp_path):
-    """Identity mount, so the config travelling in CASCADE_STORE_* resolves the same
-    inside the container as out — no rewriting, nothing to keep in sync."""
+def test_the_container_side_is_a_posix_path_not_the_host_path(tmp_path):
+    """A host path is not a valid mount target for a Linux container: `-v C:\\x:C:\\x`
+    is meaningless on Windows. So the container side is a fixed POSIX path, and the store
+    root in the spec is rewritten to match."""
+    from cascade.engine.runner.runner_docker import CONTAINER_STORE_ROOT
+
     runner, spec = _docker_for(tmp_path=tmp_path)
-    mount = [c for c in runner._build_cmd(spec) if ":" in c and "_store" in c][0]
-    host, _, container = mount.partition(":")
-    assert host == container
+    mount = [c for c in runner._build_cmd(spec) if c.endswith(CONTAINER_STORE_ROOT)][0]
+    assert mount.endswith(f":{CONTAINER_STORE_ROOT}")
+    assert CONTAINER_STORE_ROOT.startswith("/")
+
+
+def test_the_container_sees_the_rewritten_root(tmp_path):
+    """The scope is untouched, so addressing still resolves — only the root changes."""
+    import json
+
+    from cascade.engine.runner.runner_docker import CONTAINER_STORE_ROOT
+    from cascade.store.registry import decode as decode_store
+
+    runner, spec = _docker_for(tmp_path=tmp_path)
+    cmd = runner._build_cmd(spec)
+    blob = [c.split("=", 1)[1] for c in cmd if c.startswith("CASCADE_STORE_OUT=")][0]
+    store = decode_store(json.loads(blob))
+    assert store.config.root == CONTAINER_STORE_ROOT
+    assert store.config.scope == ("r1", "main", "n")  # unchanged
 
 
 def test_one_mount_even_though_there_are_two_stores(tmp_path):
@@ -244,3 +263,25 @@ def test_one_mount_even_though_there_are_two_stores(tmp_path):
 def test_no_mount_when_there_is_no_file_store():
     runner, spec = _docker_for(spec_stores=False)
     assert "-v" not in runner._build_cmd(spec)
+
+
+def test_home_is_not_forced_when_no_credentials_are_mounted(tmp_path):
+    """Forcing HOME breaks any image that pip-installed as its own user: the packages sit
+    in that user's ~/.local, and a different HOME hides them."""
+    runner, spec = _docker_for(tmp_path=tmp_path)
+    assert not [c for c in runner._build_cmd(spec) if c.startswith("HOME=")]
+
+
+def test_home_is_set_when_credentials_are_mounted(tmp_path):
+    """boto looks for ~/.aws, so the mount and HOME have to agree — and that is the only
+    reason to set it."""
+    from cascade.engine.runner.registry import RunnerEnv
+    from cascade.engine.run_spec import RunSpec
+
+    runner = build_runner(
+        RunConfig(runner=RunnerKind.docker, config=RefDocker(image="x:1")),
+        env=RunnerEnv(aws_credentials_dir=str(tmp_path / ".aws")),
+    )
+    cmd = runner._build_cmd(RunSpec(name="n", run_id="r"))
+    home = [c.split("=", 1)[1] for c in cmd if c.startswith("HOME=")][0]
+    assert any(c.endswith(f"{home}/.aws:ro") for c in cmd)
