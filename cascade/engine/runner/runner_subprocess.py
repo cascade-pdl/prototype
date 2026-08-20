@@ -5,7 +5,7 @@ import asyncio
 from asyncio.subprocess import Process
 
 from cascade.engine.runner.runner import Runner
-from cascade.engine.run_spec import RunSpec, to_env
+from cascade.protocol.run_spec import RunSpec, to_env
 from cascade.engine.runner.runner_coro import HandleCoro
 
 

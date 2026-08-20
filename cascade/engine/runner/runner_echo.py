@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Mapping
 
 from cascade.engine.runner.runner_coro import RunnerCoroBase
-from cascade.engine.run_spec import RunSpec
+from cascade.protocol.run_spec import RunSpec
 
 
 class RunnerEcho(RunnerCoroBase):

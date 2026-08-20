@@ -3,7 +3,7 @@ import sys
 import pytest
 
 from cascade.engine.runner.runner_subprocess import RunnerSubprocess
-from cascade.engine.run_spec import RunSpec
+from cascade.protocol.run_spec import RunSpec
 
 
 @pytest.mark.asyncio

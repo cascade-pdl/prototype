@@ -1,7 +1,7 @@
 import pytest
 
 from cascade.engine.runner.runner_coro import RunnerCoro, RunnerAwaitable
-from cascade.engine.run_spec import RunSpec
+from cascade.protocol.run_spec import RunSpec
 
 
 SPEC = RunSpec(name="testme", run_id="testid", instance_id="main/n")

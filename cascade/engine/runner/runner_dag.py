@@ -38,7 +38,7 @@ from cascade.store.registry import from_config
 from cascade.protocol.binding import InputBindings, OutputDecl, OutputDecls
 from cascade.engine.instance_path import InstancePath
 from cascade.engine.resolve import ResolveError, resolve_dag_output, resolve_node
-from cascade.engine.run_spec import RunSpec
+from cascade.protocol.run_spec import RunSpec
 from cascade.engine.runner.registry import RunnerEnv, build_runner
 from cascade.engine.runner.runner import Runner
 from cascade.engine.runner.runner_coro import RunnerCoroBase

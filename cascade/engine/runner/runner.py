@@ -4,7 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 
 from cascade.engine.runner.handle import Handle
-from cascade.engine.run_spec import RunSpec
+from cascade.protocol.run_spec import RunSpec
 
 
 class Runner(ABC):

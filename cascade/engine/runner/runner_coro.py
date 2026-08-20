@@ -28,7 +28,7 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 from cascade.engine.runner.runner import Runner
 from cascade.engine.runner.handle import Handle
 from cascade.engine.runner.run_status import RunStatus
-from cascade.engine.run_spec import RunSpec
+from cascade.protocol.run_spec import RunSpec
 
 
 class HandleCoro(Handle):

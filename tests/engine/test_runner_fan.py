@@ -10,7 +10,7 @@ import pytest
 
 from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.types import TypeExpr
-from cascade.engine.run_spec import RunSpec
+from cascade.protocol.run_spec import RunSpec
 from cascade.engine.runner.runner_coro import RunnerCoro
 from cascade.engine.runner.runner_fan import FanError, FanRunner
 from cascade.store.file_store import FileConfig, FileStore

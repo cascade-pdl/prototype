@@ -15,7 +15,7 @@ from cascade.protocol.binding import (
     OutputDecl,
     OutputDecls,
 )
-from cascade.engine.run_spec import RunSpec, to_env
+from cascade.protocol.run_spec import RunSpec, to_env
 from cascade.types import DataFormat, TypeExpr
 from cascade.node.node import DONE_MARKER
 from cascade.node import Node, NodeError, from_env, session
