@@ -18,7 +18,7 @@ from cascade.engine.runner.runner_echo import RunnerEcho
 from cascade.engine.runner.runner_subprocess import RunnerSubprocess, HandleSubprocess
 from cascade.engine.runner.runner_docker import RunnerDocker, HandleDocker
 from cascade.engine.runner.registry import RunnerEnv, build_runner, merge_overrides
-from cascade.engine.binding import InputBinding, InputBindings
+from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.engine.instance_path import InstancePath
 from cascade.engine.runner.runner_dag import DagRunner, DagRunError
 from cascade.engine.runner.runner_fan import FanRunner, FanError

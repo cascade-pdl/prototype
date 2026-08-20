@@ -15,7 +15,7 @@ from cascade.types import DataFormat, IoConfig
 from cascade.plan.compile import check, compile_pipeline
 from cascade.plan.plan import Plan
 from cascade.plan.signature import Port, Signature
-from cascade.engine.binding import InputBindings
+from cascade.protocol.binding import InputBindings
 from cascade.engine.resolve import resolve_node
 from cascade.engine.run_spec import RunSpec, to_env
 

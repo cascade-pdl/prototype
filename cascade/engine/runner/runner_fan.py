@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Mapping
 
-from cascade.engine.binding import InputBinding, InputBindings
+from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.engine.instance_path import InstancePath
 from cascade.store.collection import CollectionDescriptor
 from cascade.engine.run_spec import RunSpec

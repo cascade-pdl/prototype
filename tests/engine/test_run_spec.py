@@ -8,7 +8,7 @@ import json
 
 from cascade.types import TypeExpr
 from cascade.engine.run_spec import RunSpec, to_env
-from cascade.engine.binding import InputBinding, InputBindings
+from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.store.file_store import FileStore, FileConfig
 from cascade.store.registry import decode as decode_store
 

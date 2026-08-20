@@ -34,7 +34,7 @@ from cascade.plan.plan import Plan
 from cascade.store.base import Store
 from cascade.store.registry import from_config
 
-from cascade.engine.binding import InputBinding, InputBindings
+from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.engine.instance_path import InstancePath
 from cascade.engine.run_spec import RunSpec
 from cascade.engine.runner.registry import RunnerEnv

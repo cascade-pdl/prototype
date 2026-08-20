@@ -14,7 +14,7 @@ from yaml import safe_load
 
 from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import compile_pipeline
-from cascade.engine.binding import InputBindings
+from cascade.protocol.binding import InputBindings
 from cascade.engine.run_spec import RunSpec
 from cascade.engine.runner.runner_dag import DagRunner
 from cascade.store.file_store import FileConfig, FileStore

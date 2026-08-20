@@ -11,7 +11,7 @@ from yaml import safe_load
 from cascade.types import TypeExpr
 from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import compile_pipeline
-from cascade.engine.binding import InputBinding, InputBindings
+from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.engine.resolve import (
     ResolveError,
     resolve_dag_output,

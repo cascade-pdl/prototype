@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from cascade.engine.binding import (
+from cascade.protocol.binding import (
     InputBinding,
     InputBindings,
     OutputDecl,

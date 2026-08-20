@@ -8,7 +8,7 @@ import asyncio
 
 import pytest
 
-from cascade.engine.binding import InputBinding, InputBindings
+from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.types import TypeExpr
 from cascade.engine.run_spec import RunSpec
 from cascade.engine.runner.runner_coro import RunnerCoro

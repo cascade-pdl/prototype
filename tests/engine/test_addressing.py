@@ -7,7 +7,7 @@ import pytest
 
 from cascade.types import TypeExpr
 from cascade.engine.instance_path import InstancePath
-from cascade.engine.binding import InputBinding, InputBindings, OutputDecl
+from cascade.protocol.binding import InputBinding, InputBindings, OutputDecl
 from cascade.types import DataFormat, IoConfig
 
 

@@ -1,6 +1,6 @@
 import json
 
-from cascade.engine.binding import InputBindings, OutputDecls
+from cascade.protocol.binding import InputBindings, OutputDecls
 from cascade.node.codec import decode, encode
 from cascade.store.base import Store
 

@@ -22,7 +22,7 @@ from typing import Any
 from cascade.store.base import Store
 from cascade.store.registry import encode
 
-from cascade.engine.binding import InputBindings, OutputDecls
+from cascade.protocol.binding import InputBindings, OutputDecls
 
 
 @dataclass

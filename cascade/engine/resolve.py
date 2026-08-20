@@ -33,7 +33,7 @@ from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
 from cascade.plan.plan import Plan
 
-from cascade.engine.binding import InputBinding, InputBindings
+from cascade.protocol.binding import InputBinding, InputBindings
 
 
 class ResolveError(Exception):
