@@ -8,7 +8,7 @@ nothing copied, and the store layout mirrors the dag.
 import pytest
 from yaml import safe_load
 
-from cascade.model.types import TypeExpr
+from cascade.types import TypeExpr
 from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import compile_pipeline
 from cascade.engine.binding import InputBinding, InputBindings

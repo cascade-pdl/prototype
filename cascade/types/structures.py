@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Self
 
-from cascade.model.types.expr import TypeExpr
+from cascade.types.expr import TypeExpr
 
 
 @dataclass

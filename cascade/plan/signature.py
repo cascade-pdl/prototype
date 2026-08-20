@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from cascade.model.types import IoConfig, TypeError_, TypeExpr
+from cascade.types import IoConfig, TypeError_, TypeExpr
 
 __all__ = ["Port", "Signature", "TypeExpr", "TypeError_"]  # re-exported: callers import both
 

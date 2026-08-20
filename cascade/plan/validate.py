@@ -20,8 +20,8 @@ from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
 from cascade.plan.signature import Signature, TypeExpr
 from cascade.plan.type_env import TypeEnv
-from cascade.model.types import DataFormat, check_annotation
-from cascade.model.types import Structure
+from cascade.types import DataFormat, check_annotation
+from cascade.types import Structure
 from cascade.plan.elaborate import _NodeInfo, resolve_edge
 
 

@@ -6,7 +6,7 @@ from typing import Any
 from cascade.model.runner_overrides import RunnerOverrides, parse
 from cascade.model.runner_kinds import RunnerKind
 from cascade.model.ref_data import RefData, decode
-from cascade.model.types import IoDecl
+from cascade.types import IoDecl
 
 
 @dataclass

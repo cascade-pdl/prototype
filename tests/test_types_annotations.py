@@ -7,10 +7,10 @@ or omitted — so a promise may be forgotten but never invented.
 import pytest
 from yaml import safe_load
 
-from cascade.model.types import TypeError_, check_annotation, get, known
+from cascade.types import TypeError_, check_annotation, get, known
 from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import check
-from cascade.model.types import TypeExpr
+from cascade.types import TypeExpr
 
 
 # --- TypeExpr ----------------------------------------------------------------

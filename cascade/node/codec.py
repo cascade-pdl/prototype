@@ -20,7 +20,7 @@ import io
 import json
 from typing import Any
 
-from cascade.model.types import DataFormat
+from cascade.types import DataFormat
 
 
 class CodecError(Exception):

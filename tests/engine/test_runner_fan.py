@@ -9,7 +9,7 @@ import asyncio
 import pytest
 
 from cascade.engine.binding import InputBinding, InputBindings
-from cascade.model.types import TypeExpr
+from cascade.types import TypeExpr
 from cascade.engine.run_spec import RunSpec
 from cascade.engine.runner.runner_coro import RunnerCoro
 from cascade.engine.runner.runner_fan import FanError, FanRunner

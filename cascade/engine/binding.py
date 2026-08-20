@@ -35,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from cascade.model.types import DataFormat, IoConfig, TypeExpr
+from cascade.types import DataFormat, IoConfig, TypeExpr
 
 
 @dataclass(frozen=True)

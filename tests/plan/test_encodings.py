@@ -9,9 +9,9 @@ import json
 
 from yaml import safe_load
 
-from cascade.model.types import TypeExpr
+from cascade.types import TypeExpr
 from cascade.model.pipeline import Pipeline
-from cascade.model.types import DataFormat, IoConfig
+from cascade.types import DataFormat, IoConfig
 from cascade.plan.compile import check, compile_pipeline
 from cascade.plan.plan import Plan
 from cascade.plan.signature import Port, Signature

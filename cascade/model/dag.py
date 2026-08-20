@@ -5,7 +5,7 @@ from typing import Any, Self
 
 from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
-from cascade.model.types import IoDecl
+from cascade.types import IoDecl
 
 
 @dataclass

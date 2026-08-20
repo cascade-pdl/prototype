@@ -11,7 +11,7 @@ Kept as ``model/types/`` rather than a top-level package: ``cascade/types/`` or
 ``cascade/typing/`` would shadow stdlib module names, which resolves correctly under
 absolute imports but reads as a trap.
 """
-from cascade.model.types.annotations import (
+from cascade.types.annotations import (
     ANNOTATIONS,
     Annotation,
     check_annotation,
@@ -19,8 +19,8 @@ from cascade.model.types.annotations import (
     is_registered,
     known,
 )
-from cascade.model.types.expr import TypeError_, TypeExpr
-from cascade.model.types.structures import (
+from cascade.types.expr import TypeError_, TypeExpr
+from cascade.types.structures import (
     DataFormat,
     FieldDecl,
     IoConfig,

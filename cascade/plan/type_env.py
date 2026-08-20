@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from cascade.model.pipeline import Pipeline
-from cascade.model.types import Structure
+from cascade.types import Structure
 
 
 # Built-in, structureless type names that are valid but not records.

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Self
 
-from cascade.model.types import IoDecl, TypesSection
+from cascade.types import IoDecl, TypesSection
 from cascade.model.dag import Dag
 from cascade.model.refs import Ref
 
