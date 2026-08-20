@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from cascade.engine.runner.runner_subprocess import RunnerSubprocess
+from cascade.runners.process import RunnerSubprocess
 from cascade.protocol.run_spec import RunSpec
 
 

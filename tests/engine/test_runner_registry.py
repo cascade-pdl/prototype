@@ -16,15 +16,15 @@ from cascade.protocol.run_spec import RunSpec
 from cascade.plan.signature import Port, Signature, TypeExpr
 from cascade.store.file_store import FileStore, FileConfig
 
-from cascade.engine.runner.registry import (
+from cascade.runners.registry import (
     RunnerEnv,
     build_runner,
     merge_overrides,
     RUNNER_BUILDERS,
 )
-from cascade.engine.runner.runner_docker import RunnerDocker
-from cascade.engine.runner.runner_echo import RunnerEcho
-from cascade.engine.runner.runner_subprocess import RunnerSubprocess
+from cascade.runners.docker import RunnerDocker
+from cascade.runners.echo import RunnerEcho
+from cascade.runners.process import RunnerSubprocess
 
 
 def test_every_runner_kind_has_a_builder():
@@ -219,7 +219,7 @@ def _docker_for(spec_stores=True, tmp_path=None):
 def test_a_file_store_root_is_mounted_into_the_container(tmp_path):
     """Without this the container writes into its own filesystem and the data is
     discarded on exit — the run leaves only the plan the executor wrote host-side."""
-    from cascade.engine.runner.runner_docker import CONTAINER_STORE_ROOT
+    from cascade.runners.docker import CONTAINER_STORE_ROOT
 
     runner, spec = _docker_for(tmp_path=tmp_path)
     cmd = runner._build_cmd(spec)
@@ -233,7 +233,7 @@ def test_the_container_side_is_a_posix_path_not_the_host_path(tmp_path):
     """A host path is not a valid mount target for a Linux container: `-v C:\\x:C:\\x`
     is meaningless on Windows. So the container side is a fixed POSIX path, and the store
     root in the spec is rewritten to match."""
-    from cascade.engine.runner.runner_docker import CONTAINER_STORE_ROOT
+    from cascade.runners.docker import CONTAINER_STORE_ROOT
 
     runner, spec = _docker_for(tmp_path=tmp_path)
     mount = [c for c in runner._build_cmd(spec) if c.endswith(CONTAINER_STORE_ROOT)][0]
@@ -246,7 +246,7 @@ def test_the_container_sees_the_rewritten_root(tmp_path):
     """The scope is untouched, so addressing still resolves — only the root changes."""
     import json
 
-    from cascade.engine.runner.runner_docker import CONTAINER_STORE_ROOT
+    from cascade.runners.docker import CONTAINER_STORE_ROOT
     from cascade.store.registry import decode as decode_store
 
     runner, spec = _docker_for(tmp_path=tmp_path)
@@ -281,7 +281,7 @@ def test_home_is_not_forced_when_no_credentials_are_mounted(tmp_path):
 def test_home_is_set_when_credentials_are_mounted(tmp_path):
     """boto looks for ~/.aws, so the mount and HOME have to agree — and that is the only
     reason to set it."""
-    from cascade.engine.runner.registry import RunnerEnv
+    from cascade.runners.registry import RunnerEnv
     from cascade.protocol.run_spec import RunSpec
 
     runner = build_runner(

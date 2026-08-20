@@ -6,7 +6,7 @@ from asyncio.subprocess import Process
 
 from cascade.protocol.runner import Runner
 from cascade.protocol.run_spec import RunSpec, to_env
-from cascade.engine.runner.runner_coro import HandleCoro
+from cascade.protocol.coro import HandleCoro
 
 
 class HandleSubprocess(HandleCoro):

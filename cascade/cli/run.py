@@ -17,7 +17,7 @@ from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import CompileError, compile_pipeline
 from cascade.plan.plan import Plan, PlanVersionError
 from cascade.engine.executor import Executor, ExecutorError
-from cascade.engine.runner.registry import RunnerEnv
+from cascade.runners.registry import RunnerEnv
 from cascade.cli.errors import CliError
 from cascade.cli._resolve import add_store_flags, build_store
 

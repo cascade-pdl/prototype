@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from cascade.engine.runner.run_status import RunStatus
+from cascade.protocol.run_status import RunStatus
 
 
 class Handle(ABC):

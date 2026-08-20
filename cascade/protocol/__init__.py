@@ -1,5 +1,6 @@
 from cascade.protocol.instance_path import InstancePath
 from cascade.protocol.run_spec import RunSpec
+from cascade.protocol.run_status import RunStatus
 from cascade.protocol.runner import Runner
 from cascade.protocol.handle import Handle
 
@@ -7,6 +8,7 @@ from cascade.protocol.handle import Handle
 __all__ = [
     "InstancePath",
     "RunSpec",
+    "RunStatus",
     "Runner",
     "Handle",
 ]

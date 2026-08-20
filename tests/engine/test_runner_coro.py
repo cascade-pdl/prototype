@@ -1,6 +1,6 @@
 import pytest
 
-from cascade.engine.runner.runner_coro import RunnerCoro, RunnerAwaitable
+from cascade.runners.coro import RunnerCoro, RunnerAwaitable
 from cascade.protocol.run_spec import RunSpec
 
 

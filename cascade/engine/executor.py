@@ -37,8 +37,8 @@ from cascade.store.registry import from_config
 from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.protocol.instance_path import InstancePath
 from cascade.protocol.run_spec import RunSpec
-from cascade.engine.runner.registry import RunnerEnv
-from cascade.engine.runner.runner_dag import DagRunner
+from cascade.runners.registry import RunnerEnv
+from cascade.engine.dag import DagRunner
 
 
 RUN_INPUTS = "$in"

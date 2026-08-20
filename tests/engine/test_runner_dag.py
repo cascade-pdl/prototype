@@ -18,7 +18,7 @@ from cascade.engine.resolve import (
     resolve_node,
 )
 from cascade.protocol.run_spec import RunSpec
-from cascade.engine.runner.runner_dag import DagRunner, DagRunError
+from cascade.engine.dag import DagRunner, DagRunError
 from cascade.store.file_store import FileConfig, FileStore
 
 

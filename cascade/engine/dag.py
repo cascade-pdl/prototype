@@ -39,10 +39,10 @@ from cascade.protocol.binding import InputBindings, OutputDecl, OutputDecls
 from cascade.protocol.instance_path import InstancePath
 from cascade.engine.resolve import ResolveError, resolve_dag_output, resolve_node
 from cascade.protocol.run_spec import RunSpec
-from cascade.engine.runner.registry import RunnerEnv, build_runner
+from cascade.runners.registry import RunnerEnv, build_runner
 from cascade.protocol.runner import Runner
-from cascade.engine.runner.runner_coro import RunnerCoroBase
-from cascade.engine.runner.runner_fan import FanRunner
+from cascade.protocol.coro import RunnerCoroBase
+from cascade.engine.fan import FanRunner
 
 
 class DagRunError(Exception):

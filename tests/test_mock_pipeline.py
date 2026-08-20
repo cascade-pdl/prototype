@@ -16,7 +16,7 @@ from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import check, compile_pipeline
 from cascade.protocol.binding import InputBindings
 from cascade.protocol.run_spec import RunSpec
-from cascade.engine.runner.runner_dag import DagRunner
+from cascade.engine.dag import DagRunner
 from cascade.store.file_store import FileConfig, FileStore
 
 

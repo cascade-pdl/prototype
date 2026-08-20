@@ -34,9 +34,9 @@ from cascade.plan.run_config import RunConfig
 from cascade.plan.signature import Signature
 
 from cascade.protocol.runner import Runner
-from cascade.engine.runner.runner_docker import RunnerDocker
-from cascade.engine.runner.runner_echo import RunnerEcho
-from cascade.engine.runner.runner_subprocess import RunnerSubprocess
+from cascade.runners.docker import RunnerDocker
+from cascade.runners.echo import RunnerEcho
+from cascade.runners.process import RunnerSubprocess
 
 
 class RunnerKindError(Exception):

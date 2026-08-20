@@ -3,7 +3,7 @@ import os
 from dataclasses import replace
 
 from cascade.protocol.runner import Runner
-from cascade.engine.runner.runner_subprocess import HandleSubprocess
+from cascade.runners.process import HandleSubprocess
 from cascade.protocol.run_spec import RunSpec, to_env
 from cascade.store.base import Store
 from cascade.store.file_store import FileConfig

@@ -11,8 +11,8 @@ import pytest
 from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.types import TypeExpr
 from cascade.protocol.run_spec import RunSpec
-from cascade.engine.runner.runner_coro import RunnerCoro
-from cascade.engine.runner.runner_fan import FanError, FanRunner
+from cascade.runners.coro import RunnerCoro
+from cascade.engine.fan import FanError, FanRunner
 from cascade.store.file_store import FileConfig, FileStore
 
 
@@ -263,7 +263,7 @@ async def test_a_fanned_subdag_runs_every_stage_per_element(tmp_path):
     from yaml import safe_load
     from cascade.model.pipeline import Pipeline
     from cascade.plan.compile import compile_pipeline
-    from cascade.engine.runner.runner_dag import DagRunner
+    from cascade.engine.dag import DagRunner
 
     plan = compile_pipeline(Pipeline.decode(safe_load(CASE_B)))
     store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main")))

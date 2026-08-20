@@ -34,7 +34,7 @@ from cascade.protocol.instance_path import InstancePath
 from cascade.store.collection import CollectionDescriptor
 from cascade.protocol.run_spec import RunSpec
 from cascade.protocol.runner import Runner
-from cascade.engine.runner.runner_coro import RunnerCoroBase
+from cascade.protocol.coro import RunnerCoroBase
 from cascade.store.base import Store
 from cascade.store.registry import from_config
 
