@@ -25,8 +25,8 @@ import asyncio
 from abc import abstractmethod
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
-from cascade.engine.runner.runner import Runner
-from cascade.engine.runner.handle import Handle
+from cascade.protocol.runner import Runner
+from cascade.protocol.handle import Handle
 from cascade.engine.runner.run_status import RunStatus
 from cascade.protocol.run_spec import RunSpec
 

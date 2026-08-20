@@ -33,7 +33,7 @@ from cascade.model.runner_overrides import RunnerOverrides
 from cascade.plan.run_config import RunConfig
 from cascade.plan.signature import Signature
 
-from cascade.engine.runner.runner import Runner
+from cascade.protocol.runner import Runner
 from cascade.engine.runner.runner_docker import RunnerDocker
 from cascade.engine.runner.runner_echo import RunnerEcho
 from cascade.engine.runner.runner_subprocess import RunnerSubprocess

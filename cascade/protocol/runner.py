@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 
-from cascade.engine.runner.handle import Handle
+from cascade.protocol.handle import Handle
 from cascade.protocol.run_spec import RunSpec
 
 

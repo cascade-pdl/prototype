@@ -5,8 +5,8 @@ spawn-then-poll loop is written once in ``Runner.run``. Kinds differ only in wha
 they spawn — a container, a subprocess, or an in-process coroutine — which is what
 lets a dag or a fanned node be substituted for a ref without the caller caring.
 """
-from cascade.engine.runner.runner import Runner
-from cascade.engine.runner.handle import Handle
+from cascade.protocol.runner import Runner
+from cascade.protocol.handle import Handle
 from cascade.engine.runner.run_status import RunStatus
 from cascade.engine.runner.runner_coro import (
     HandleCoro,

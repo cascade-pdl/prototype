@@ -2,7 +2,7 @@ import asyncio
 import os
 from dataclasses import replace
 
-from cascade.engine.runner.runner import Runner
+from cascade.protocol.runner import Runner
 from cascade.engine.runner.runner_subprocess import HandleSubprocess
 from cascade.protocol.run_spec import RunSpec, to_env
 from cascade.store.base import Store
