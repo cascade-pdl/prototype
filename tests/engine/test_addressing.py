@@ -6,7 +6,7 @@ renderings: a tuple for ``StoreConfig.subscope`` and a string for logs.
 import pytest
 
 from cascade.types import TypeExpr
-from cascade.engine.instance_path import InstancePath
+from cascade.protocol.instance_path import InstancePath
 from cascade.protocol.binding import InputBinding, InputBindings, OutputDecl
 from cascade.types import DataFormat, IoConfig
 
