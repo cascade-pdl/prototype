@@ -196,3 +196,25 @@ def test_a_json_object_that_merely_contains_the_marker_is_data(store):
     store.put_json("data", {marker: body, "other": 1})
     assert not store.is_collection("data")
     assert store.read_json("data") == {marker: body, "other": 1}
+
+def test_copy_resolved_carries_a_distributed_collection_with_its_elements(store):
+    """The copy must read back the same through a store that cannot see the original:
+    the elements travel too, and the new descriptor points at them."""
+    store.put_json("v", 1, at=("src", "0"))
+    store.put_json("v", 2, at=("src", "1"))
+    store.write_collection("v", [(("0",), "v"), (("1",), "v")], at=("src",))
+    store.write_collection("vv", [(("src",), "v")])
+
+    dst = FileStore(store.config.subscope(("dst",)))
+    store.copy_resolved("vv", "copied", dst_store=dst)
+
+    assert dst.read_json("copied") == [[1, 2]]
+    # nothing in the copy references outside its own scope
+    store.put_json("v", 99, at=("src", "0"))
+    assert dst.read_json("copied") == [[1, 2]]
+
+
+def test_copy_resolved_copies_a_plain_object_as_is(store):
+    store.put("blob", b"\x89PNG", at=("a",))
+    store.copy_resolved("blob", "b", from_=("a",), to_=("b",))
+    assert store.get("b", at=("b",)) == b"\x89PNG"

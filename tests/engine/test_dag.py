@@ -276,7 +276,8 @@ async def test_m4_a_nested_dag_runs_by_recursion(nested_plan, tmp_path):
     )
     assert code == 0
 
-    # the subdag's node wrote one level deeper, beneath its own dag node's slot
+    # the subdag staged its input into its own $in, and its node wrote one level
+    # deeper, beneath its own dag node's slot
     written = sorted(
         str(p.relative_to(tmp_path)).replace("\\", "/")
         for p in tmp_path.rglob("*")
@@ -285,8 +286,58 @@ async def test_m4_a_nested_dag_runs_by_recursion(nested_plan, tmp_path):
     assert written == [
         "r1/main/$in/src",
         "r1/main/l/items",
+        "r1/main/p/$in/raw",
         "r1/main/p/t/clean",
     ]
+    assert store.get_json("raw", at=("p", "$in")) == store.get_json("items", at=("l",))
+
+
+DEEP = """
+entrypoint: main
+input: [ { name: src, type: string } ]
+refs:
+  - { name: load, runner: echo, config: {}, input: [ { name: src, type: string } ], output: [ { name: items, type: "string[]" } ] }
+  - { name: use, runner: echo, config: {}, input: [ { name: a, type: "string[]" }, { name: b, type: string } ], output: [ { name: out, type: string } ] }
+dags:
+  - name: inner
+    input: [ { name: a, type: "string[]" }, { name: b, type: string } ]
+    nodes:
+      - { name: u, runs: use, depends_on: [ { node: "$input", field: a, as: a }, { node: "$input", field: b, as: b } ] }
+    output: [ { node: u, field: out, as: out } ]
+  - name: middle
+    input: [ { name: a, type: "string[]" }, { name: b, type: string } ]
+    nodes:
+      - { name: i, runs: inner, depends_on: [ { node: "$input", field: a, as: a }, { node: "$input", field: b, as: b } ] }
+    output: [ { node: i, field: out, as: out } ]
+  - name: main
+    input: [ { name: src, type: string } ]
+    nodes:
+      - { name: l, runs: load, depends_on: [ { node: "$input", field: src, as: src } ] }
+      - { name: m, runs: middle, depends_on: [ { node: l, field: items, as: a }, { node: "$input", field: src, as: b } ] }
+    output: [ { node: m, field: out, as: out } ]
+"""
+
+
+@pytest.mark.asyncio
+async def test_inputs_reach_two_levels_down_one_boundary_at_a_time(tmp_path):
+    """A sibling's output and the run's own input both pass through two dag
+    boundaries; each boundary stages into its own $in, so the innermost node reads
+    only its own dag's slot."""
+    plan = compile_pipeline(Pipeline.decode(safe_load(DEEP)))
+    store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main")))
+    store.put_json("src", "x", at=("$in",))
+    code = await DagRunner("main", plan).run(
+        RunSpec(
+            name="main", run_id="r1", instance_id="r1/main", store_out=store,
+            inputs=InputBindings(
+                inputs=(InputBinding(port="src", scope=("$in",), key="src", type=TypeExpr.parse("string")),)
+            ),
+        )
+    )
+    assert code == 0
+    assert store.get_json("b", at=("m", "i", "$in")) == "x"
+    assert store.get_json("a", at=("m", "i", "$in")) == store.get_json("items", at=("l",))
+    assert store.has("out", at=("m", "i", "u"))
 
 
 @pytest.mark.asyncio

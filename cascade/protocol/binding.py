@@ -1,10 +1,15 @@
 """Bindings — what an instance is told about its *inputs*.
 
-Under the addressing model this project settled on, nothing is staged: an instance
-receives a store scoped to its parent dag (so sibling node outputs are visible) and
-is told, per port, which sibling scope and key to read. It writes to its own slot
-through a separate, instance-scoped store. No copies, no duplicate storage, and the
-layout in the store mirrors the dag.
+Under the addressing model this project settled on, an instance receives a store
+scoped to its parent dag (so sibling node outputs are visible) and is told, per port,
+which sibling scope and key to read. It writes to its own slot through a separate,
+instance-scoped store. Sibling outputs are never copied, and the layout in the store
+mirrors the dag.
+
+The one thing that is staged is a dag's own inputs: they live outside the dag's slot,
+where its inner nodes cannot read, so every dag boundary copies them into
+``<slot>/$in/`` (``INPUTS_SCOPE``) and binds them there. The executor does this for
+the root, ``DagRunner`` for a nested dag, ``FanRunner`` for a lane's element.
 
 **Inputs only, deliberately.** Outputs need no binding: every instance of a runnable
 writes the same ports (they are in ``Signature.outputs``, which the plan already
@@ -36,6 +41,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from cascade.types import DataFormat, IoConfig, TypeExpr
+
+
+INPUTS_SCOPE = "$in"
+"""The segment beneath a dag's (or a fan lane's) slot where its staged inputs live."""
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,11 @@ from cascade.store.collection import (
 )
 
 
+ELEMENTS = "$el"
+"""Where ``copy_resolved`` puts a copied collection's elements. ``$`` marks an
+engine-owned name, so no declared port can collide with it."""
+
+
 class StoreConfig(ABC):
 
     scope: tuple[str, ...]
@@ -73,6 +78,52 @@ class Store(ABC):
             key=dst_key,
             data=self.get(key=src_key, at=from_),
             at=to_,
+        )
+
+    def copy_resolved(
+        self,
+        src_key: str,
+        dst_key: str,
+        from_: tuple[str, ...] = (),
+        to_: tuple[str, ...] = (),
+        dst_store: "Store | None" = None,
+        _depth: int = 0,
+    ) -> str:
+        """Copy a key so the copy reads back the same from its new location.
+
+        ``copy`` moves one object, which is wrong for a distributed collection: its
+        descriptor's element scopes are relative to where it sits, and the elements may
+        be somewhere the destination's readers cannot see. So the elements are copied
+        too, beneath ``<to_>/$el/<dst_key>/<i>/``, and a new descriptor references them
+        there. A collection of collections recurses.
+
+        Every object passes through here, so the S3 ``copy`` fast path is not used: the
+        descriptor check needs the bytes.
+        """
+        if _depth > MAX_DEPTH:
+            raise CollectionError(
+                f"collection nesting exceeded {MAX_DEPTH} at {'/'.join((*from_, src_key))}; "
+                "a descriptor probably references itself"
+            )
+        dst_store = dst_store or self
+        raw = self.get(src_key, at=from_)
+        descriptor = CollectionDescriptor.try_decode(raw)
+        if descriptor is None:
+            return dst_store.put(dst_key, raw, at=to_)
+        elements = []
+        for index, (scope, element_key) in enumerate(descriptor.elements):
+            element_scope = (ELEMENTS, dst_key, str(index))
+            self.copy_resolved(
+                element_key,
+                element_key,
+                from_=(*from_, *scope),
+                to_=(*to_, *element_scope),
+                dst_store=dst_store,
+                _depth=_depth + 1,
+            )
+            elements.append((element_scope, element_key))
+        return dst_store.write_collection(
+            dst_key, elements, at=to_, element_type=descriptor.element_type
         )
 
     # --- collections ------------------------------------------------------

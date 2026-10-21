@@ -32,14 +32,14 @@ from cascade.plan.plan import Plan
 from cascade.store.base import Store
 from cascade.store.registry import from_config
 
-from cascade.protocol.binding import InputBinding, InputBindings
+from cascade.protocol.binding import INPUTS_SCOPE, InputBinding, InputBindings
 from cascade.protocol.instance_path import InstancePath
 from cascade.protocol.run_spec import RunSpec
 from cascade.runners.build import RefRunnerBuilder, configure_ref_builder
 from cascade.engine.dag import DagRunner
 
 
-RUN_INPUTS = "$in"
+RUN_INPUTS = INPUTS_SCOPE
 PLAN_KEY = "plan"
 
 

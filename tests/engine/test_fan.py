@@ -287,3 +287,60 @@ async def test_a_fanned_subdag_runs_every_stage_per_element(tmp_path):
     gathered = store.read_json("clean", at=("p",))   # descriptor -> the lanes' outputs
     assert len(gathered) == 3
     assert runner.output_scopes() == {"results": (("p",), "clean")}
+
+CASE_C = """
+entrypoint: main
+input: []
+refs:
+  - { name: lister, runner: echo, config: {}, input: [], output: [ { name: images, type: "string[]" } ] }
+  - { name: weights, runner: echo, config: {}, input: [], output: [ { name: model, type: string } ] }
+  - { name: detect, runner: echo, config: {}, input: [ { name: image, type: string }, { name: model, type: string } ], output: [ { name: dets, type: string } ] }
+  - { name: count, runner: echo, config: {}, input: [ { name: all, type: "string[]" } ], output: [ { name: n, type: string } ] }
+dags:
+  - name: perimage
+    input: [ { name: image, type: string }, { name: model, type: string } ]
+    nodes:
+      - { name: d, runs: detect, depends_on: [ { node: "$input", field: image, as: image }, { node: "$input", field: model, as: model } ] }
+    output: [ { node: d, field: dets, as: dets } ]
+  - name: summary
+    input: [ { name: all, type: "string[]" } ]
+    nodes:
+      - { name: c, runs: count, depends_on: [ { node: "$input", field: all, as: all } ] }
+    output: [ { node: c, field: n, as: n } ]
+  - name: main
+    input: []
+    nodes:
+      - { name: l, runs: lister }
+      - { name: w, runs: weights }
+      - { name: p, runs: perimage, scatter: image, depends_on: [ { node: l, field: images, as: image }, { node: w, field: model, as: model } ] }
+      - { name: s, runs: summary, depends_on: [ { node: p, field: dets, as: all } ] }
+    output: [ { node: s, field: n, as: n } ]
+"""
+
+
+@pytest.mark.asyncio
+async def test_a_fanned_subdag_stages_broadcast_inputs_per_lane_and_a_gathered_collection_survives_staging(tmp_path):
+    """The non-scattered input is copied into every lane's $in (the known cost of
+    staging); the scattered element is already there and is not copied again. The
+    fan's gathered descriptor, fed into another subdag, is copied with its elements,
+    so it reads back the same from inside."""
+    from yaml import safe_load
+    from cascade.model.pipeline import Pipeline
+    from cascade.plan.compile import compile_pipeline
+    from cascade.engine.dag import DagRunner
+
+    plan = compile_pipeline(Pipeline.decode(safe_load(CASE_C)))
+    store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main")))
+    assert await DagRunner("main", plan).run(
+        RunSpec(name="main", run_id="r1", instance_id="r1/main",
+                store_out=store, inputs=InputBindings())
+    ) == 0
+
+    for lane in range(3):
+        assert store.get_json("model", at=("p", str(lane), "$in")) == store.get_json("model", at=("w",))
+        assert store.has("dets", at=("p", str(lane), "d"))
+
+    assert store.is_collection("dets", at=("p",))
+    assert store.is_collection("all", at=("s", "$in"))
+    assert store.read_json("all", at=("s", "$in")) == store.read_json("dets", at=("p",))
+    assert store.has("n", at=("s", "c"))

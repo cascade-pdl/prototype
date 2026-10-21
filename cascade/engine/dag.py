@@ -12,6 +12,13 @@ exactly this dag's *writer*, and a child's writer is that subscoped by the node 
 Siblings are therefore visible to each other with nothing copied, and the dag never
 needs the deployment's base config: it derives everything from the store it was handed.
 
+**A dag stages its own inputs.** They are bound relative to the dag's *reader* (its
+parent's slot), which its inner nodes cannot see: they read this dag's slot. So on
+entry the dag copies each bound input into ``<slot>/$in/`` and rebinds it there, which
+is exactly what the executor does for the root. Each boundary reaches one level up,
+once, so no instance ever needs a store wider than its dag, at any depth. A fan lane's
+scattered element is already staged at that spot and is not copied twice.
+
 **It coordinates; it never carries data.** The runner reads no payloads. It resolves
 scopes, spawns and awaits.
 
@@ -24,6 +31,7 @@ no per-node result to record — an output always lives at its node's name.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Awaitable
 
 from cascade.graph import Graph
@@ -33,7 +41,7 @@ from cascade.plan.plan import Plan
 from cascade.store.base import Store
 from cascade.store.registry import from_config
 
-from cascade.protocol.binding import InputBindings, OutputDecl, OutputDecls
+from cascade.protocol.binding import INPUTS_SCOPE, InputBindings, OutputDecl, OutputDecls
 from cascade.protocol.instance_path import InstancePath
 from cascade.engine.resolve import ResolveError, resolve_dag_output, resolve_node
 from cascade.protocol.run_spec import RunSpec
@@ -53,6 +61,15 @@ def _store_at(store: Store, scope: tuple[str, ...]) -> Store:
     config = store.config.subscope(scope)
     _kind, store_cls, _config_cls = from_config(config)
     return store_cls(config)
+
+
+def _same_location(a: Store, a_at: tuple[str, ...], a_key: str,
+                   b: Store, b_at: tuple[str, ...], b_key: str) -> bool:
+    """Whether two (store, scope, key) triples name the same object."""
+    a_raw, b_raw = a.config.encode(), b.config.encode()
+    a_full = (*a_raw.pop("scope"), *a_at, a_key)
+    b_full = (*b_raw.pop("scope"), *b_at, b_key)
+    return a_raw == b_raw and a_full == b_full
 
 
 class DagRunner(RunnerCoroBase):
@@ -158,10 +175,31 @@ class DagRunner(RunnerCoroBase):
         if code != 0:
             raise DagRunError(f"{child_path}: exited {code}")
 
+    def _stage_inputs(self, spec: RunSpec) -> InputBindings:
+        """Copy each bound input into this dag's ``$in`` and rebind it there.
+
+        Without a reader there is no parent scope: this is the root, and the executor
+        has already staged the run's inputs into ``$in``.
+        """
+        bindings = spec.inputs or InputBindings()
+        if spec.store_in is None or not bindings.inputs:
+            return bindings
+        if spec.store_out is None:
+            raise DagRunError(f"dag {self.dag!r} has inputs to stage but no writer store")
+        staged = []
+        for b in bindings.inputs:
+            dst = (INPUTS_SCOPE,)
+            if not _same_location(spec.store_in, b.scope, b.key, spec.store_out, dst, b.port):
+                spec.store_in.copy_resolved(
+                    b.key, b.port, from_=b.scope, to_=dst, dst_store=spec.store_out
+                )
+            staged.append(replace(b, scope=dst, key=b.port))
+        return InputBindings(inputs=tuple(staged))
+
     async def _run_dag(self, spec: RunSpec) -> int:
         graph = self.graph
         path = InstancePath.parse(spec.instance_id or spec.run_id)
-        dag_inputs = spec.inputs or InputBindings()
+        dag_inputs = self._stage_inputs(spec)
 
         for wave in graph.waves():
             dispatches = [

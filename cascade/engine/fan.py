@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Mapping
 
-from cascade.protocol.binding import InputBinding, InputBindings
+from cascade.protocol.binding import INPUTS_SCOPE, InputBinding, InputBindings
 from cascade.protocol.instance_path import InstancePath
 from cascade.store.collection import CollectionDescriptor
 from cascade.protocol.run_spec import RunSpec
@@ -39,7 +39,7 @@ from cascade.store.base import Store
 from cascade.store.registry import from_config
 
 
-SCATTER_INPUT = "$in"
+SCATTER_INPUT = INPUTS_SCOPE
 
 
 class FanError(Exception):
