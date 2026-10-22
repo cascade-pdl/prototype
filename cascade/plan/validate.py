@@ -34,6 +34,7 @@ def validate_edges(
     errors: list[str] = []
 
     errors += _check_reserved_names(pipeline)
+    errors += _check_ref_overrides(pipeline)
     errors += _check_encodings(pipeline)
 
     if type_env is not None:
@@ -200,5 +201,26 @@ def _check_encodings(pipeline: Pipeline) -> list[str]:
                     f"dag {dag.name!r} input {port.name!r}: encoding "
                     f"{port.config.encoding.value!r} is meaningless on a dag port — only a "
                     "ref transcodes, and the store is canonical JSON"
+                )
+    return errors
+
+
+def _check_ref_overrides(pipeline: Pipeline) -> list[str]:
+    """A ref may not state a *deployment-only* override.
+
+    ``aws_credentials_dir`` and ``map_current_user`` describe the machine and the account
+    running the container, not the work the ref does — so a pipeline stating one would be
+    unportable, and silently ignoring it would be worse. Refs and deployments share one
+    override class, and this is the rule that keeps that honest.
+    """
+    errors: list[str] = []
+    for ref in pipeline.refs:
+        if ref.overrides is None:
+            continue
+        for name in sorted(type(ref.overrides).deployment_only):
+            if getattr(ref.overrides, name, None) is not None:
+                errors.append(
+                    f"ref {ref.name!r}: override {name!r} is deployment-only — it "
+                    "describes the machine, not the ref, so it belongs in deployment.yaml"
                 )
     return errors

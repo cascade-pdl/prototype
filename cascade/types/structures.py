@@ -66,12 +66,6 @@ class DataFormat(str, Enum):
 
 
 @dataclass
-class IOField:
-    name: str
-    type: TypeExpr
-
-
-@dataclass
 class IoConfig:
     encoding: DataFormat = DataFormat.json
     mapping: dict[str, str] = field(default_factory=dict)
@@ -88,9 +82,16 @@ class IoConfig:
 
 
 @dataclass
-class IoDecl(IOField):
-    """One named input or output port with a type expression and IO config."""
+class IoDecl:
+    """One named input or output port: a type expression and its IO config.
 
+    ``name`` and ``type`` were until recently a separate ``IOField`` base class with
+    exactly one subclass and no independent user — an inheritance step carrying no
+    information. Inlined.
+    """
+
+    name: str
+    type: TypeExpr
     config: IoConfig = field(default_factory=IoConfig)
 
     @classmethod

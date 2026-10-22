@@ -15,7 +15,7 @@ can ask for, invert ``merge_overrides`` — it is the single place that decides.
 
 **Machine-local context is a third input, not an override.** A credentials
 directory is neither an authoring choice nor a portable deployment fact; it is a
-property of the machine doing the spawning. It travels in ``RunnerEnv`` rather than
+property of the deployment, so it lives in that kind's overrides rather than
 being smuggled into the override vocabulary, where it would be meaningless on a ref.
 
 No dependency on ``cascade.deployment``: callers pass the already-extracted
@@ -24,7 +24,7 @@ engine layer below the configuration layer.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
+from dataclasses import fields, replace
 from typing import Callable, Mapping
 
 from cascade.model.runner_kinds import RunnerKind
@@ -41,18 +41,6 @@ from cascade.runners.process import RunnerSubprocess
 
 class RunnerKindError(Exception):
     """No builder is registered for this runner kind."""
-
-
-@dataclass
-class RunnerEnv:
-    """Machine-local spawn context — not carried by the plan or the deployment."""
-
-    aws_credentials_dir: str | None = None
-    map_current_user: bool = True
-    cwd: str | None = None
-    """Where a ref's *relative* command resolves. The CLI sets it to the directory of
-    the pipeline (or plan) being run, so a ref may name its script relative to the
-    document that declares it and the run works from any working directory."""
 
 
 def merge_overrides(
@@ -79,20 +67,25 @@ def merge_overrides(
     return replace(deployment, **stated)
 
 
+def _default(value, fallback):
+    """An override left unset takes the fallback. ``None`` means "not stated", never
+    "false" — which is why these cannot be plain ``or``."""
+    return fallback if value is None else value
+
+
 def _build_docker(
     config: RefData,
     overrides: RunnerOverrides | None,
-    env: RunnerEnv,
     signature: Signature | None = None,
+    cwd: str | None = None,
 ) -> Runner:
     assert isinstance(config, RefDocker)
-    no_pull = getattr(overrides, "no_pull", None)
     return RunnerDocker(
         image=config.image,
         extra_args=list(config.extra_args),
-        no_pull=True if no_pull is None else no_pull,
-        map_current_user=env.map_current_user,
-        aws_credentials_dir=env.aws_credentials_dir,
+        no_pull=_default(getattr(overrides, "no_pull", None), True),
+        map_current_user=_default(getattr(overrides, "map_current_user", None), True),
+        aws_credentials_dir=getattr(overrides, "aws_credentials_dir", None),
         memory=getattr(overrides, "memory", None),
         cpu=getattr(overrides, "cpu", None),
     )
@@ -101,18 +94,18 @@ def _build_docker(
 def _build_subprocess(
     config: RefData,
     overrides: RunnerOverrides | None,
-    env: RunnerEnv,
     signature: Signature | None = None,
+    cwd: str | None = None,
 ) -> Runner:
     assert isinstance(config, RefSubprocess)
-    return RunnerSubprocess(cmd=list(config.cmd), cwd=env.cwd)
+    return RunnerSubprocess(cmd=list(config.cmd), cwd=cwd)
 
 
 def _build_echo(
     config: RefData,
     overrides: RunnerOverrides | None,
-    env: RunnerEnv,
     signature: Signature | None = None,
+    cwd: str | None = None,
 ) -> Runner:
     assert isinstance(config, RefEcho)
     # output ports come from the plan: per-runnable, like the runner itself
@@ -135,8 +128,8 @@ RUNNER_BUILDERS: Mapping[RunnerKind, Builder] = {
 def build_runner(
     config: RunConfig,
     deployment_overrides: RunnerOverrides | None = None,
-    env: RunnerEnv | None = None,
     signature: Signature | None = None,
+    cwd: str | None = None,
 ) -> Runner:
     """Build the live runner for one runnable.
 
@@ -153,6 +146,6 @@ def build_runner(
     return build(
         config.config,
         merge_overrides(config.overrides, deployment_overrides),
-        env or RunnerEnv(),
         signature=signature,
+        cwd=cwd,
     )

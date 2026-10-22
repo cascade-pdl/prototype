@@ -28,8 +28,6 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from cascade.deployment import Deployment
-from cascade.model.runner_kinds import RunnerKind
-from cascade.model.runner_overrides import RunnerOverrides
 from cascade.plan.plan import Plan
 from cascade.store.base import Store
 from cascade.store.registry import from_config
@@ -37,7 +35,7 @@ from cascade.store.registry import from_config
 from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.protocol.instance_path import InstancePath
 from cascade.protocol.run_spec import RunSpec
-from cascade.runners.registry import RunnerEnv
+from cascade.runners.build import RefRunnerBuilder, configure_ref_builder
 from cascade.engine.dag import DagRunner
 
 
@@ -90,21 +88,26 @@ class Executor:
         plan: Plan,
         deployment: Deployment | None = None,
         store: Store | None = None,
-        env: RunnerEnv | None = None,
-        overrides: Mapping[RunnerKind, RunnerOverrides] | None = None,
+        build_ref: RefRunnerBuilder | None = None,
     ):
         """``deployment`` supplies the store and the per-kind runner defaults; ``store``
-        overrides it directly, which is what tests and ``--backend`` flags want."""
+        overrides it directly, which is what tests and ``--backend`` flags want.
+
+        ``build_ref`` is how a ref becomes a runner. Supplied here rather than assembled
+        inside ``DagRunner`` so that coordination never touches configuration: the executor
+        is the layer that holds a deployment, so it is the layer that turns one into
+        construction.
+        """
         if deployment is None and store is None:
             raise ExecutorError("an executor needs either a deployment or a store")
         self.plan = plan
         self.deployment = deployment
-        self.env = env or RunnerEnv()
-        self.overrides = dict(
-            overrides if overrides is not None
-            else (deployment.runners if deployment else {})
-        )
         self._base = store if store is not None else _live(deployment.store)
+        # the executor is where a deployment becomes the pieces the engine needs: a live
+        # store, and a builder bound to the per-kind overrides
+        self.build_ref = build_ref or configure_ref_builder(
+            overrides=deployment.runners if deployment else {}
+        )
 
     # ------------------------------------------------------------------ inputs
     def _declared_inputs(self) -> dict[str, Any]:
@@ -165,7 +168,7 @@ class Executor:
 
         bindings = self._stage_inputs(dag_store, inputs or {})
 
-        runner = DagRunner(dag, self.plan, self.env, self.overrides)
+        runner = DagRunner(dag, self.plan, self.build_ref)
         code = await runner.run(
             RunSpec(
                 name=dag,
@@ -192,10 +195,10 @@ async def execute(
     inputs: Mapping[str, Any] | None = None,
     *,
     store: Store | None = None,
-    env: RunnerEnv | None = None,
+    build_ref: RefRunnerBuilder | None = None,
     run_id: str | None = None,
 ) -> RunResult:
     """One-shot convenience over ``Executor``."""
-    return await Executor(plan, deployment=deployment, store=store, env=env).run(
+    return await Executor(plan, deployment=deployment, store=store, build_ref=build_ref).run(
         inputs=inputs, run_id=run_id
     )

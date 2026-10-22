@@ -20,15 +20,18 @@ LAYERS = [
     "cascade.node",        # the node-side SDK
     "cascade.deployment",  # substrate configuration
     "cascade.project",
+    "cascade.executor",    # the shell: turns a deployment into what the engine needs
     "cascade.cli",
 ]
 RANK = {name: index for index, name in enumerate(LAYERS)}
 
-KNOWN_VIOLATIONS = {
-    # the executor is the top shell sitting inside a middle layer; moving it out is the
-    # next step, and this entry should go with it
-    ("cascade.engine", "cascade.deployment"),
-}
+KNOWN_VIOLATIONS: set[tuple[str, str]] = set()
+"""Empty, and worth keeping that way.
+
+It held ``engine -> deployment`` while the executor lived inside ``engine``: the only
+component holding a ``Deployment``, sitting in a package that coordinates. Moving it to
+``cascade.executor`` closed the last upward edge.
+"""
 
 
 def _package(module: str) -> str:

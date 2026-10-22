@@ -16,12 +16,8 @@ from cascade.runners.coro import RunnerAwaitable, RunnerCoro
 from cascade.runners.docker import HandleDocker, RunnerDocker
 from cascade.runners.echo import RunnerEcho
 from cascade.runners.process import HandleSubprocess, RunnerSubprocess
-from cascade.runners.registry import (
-    RunnerEnv,
-    RunnerKindError,
-    build_runner,
-    merge_overrides,
-)
+from cascade.runners.build import RefRunnerBuilder, build_ref, configure_ref_builder
+from cascade.runners.registry import RunnerKindError, build_runner, merge_overrides
 
 __all__ = [
     "HandleDocker",
@@ -30,9 +26,11 @@ __all__ = [
     "RunnerCoro",
     "RunnerDocker",
     "RunnerEcho",
-    "RunnerEnv",
+    "RefRunnerBuilder",
     "RunnerKindError",
     "RunnerSubprocess",
     "build_runner",
+    "build_ref",
+    "configure_ref_builder",
     "merge_overrides",
 ]

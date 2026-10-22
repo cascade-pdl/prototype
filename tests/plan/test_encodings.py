@@ -7,6 +7,7 @@ port because a dag transcodes nothing.
 """
 import json
 
+import pytest
 from yaml import safe_load
 
 from cascade.types import TypeExpr
@@ -143,3 +144,51 @@ def test_signature_can_be_built_directly_from_ports():
         outputs={"b": Port(TypeExpr.parse("float[]"), IoConfig(DataFormat.csv))},
     )
     assert Signature.decode(sig.encode()) == sig
+
+# --- deployment-only overrides -------------------------------------------------
+
+DEPLOYMENT_ONLY = """
+entrypoint: main
+input: []
+types: { structures: [] }
+refs:
+  - name: r
+    runner: docker
+    config: { image: "x:1" }
+    overrides: { %OVERRIDE% }
+    input: []
+    output: [ { name: o, type: string } ]
+dags:
+  - name: main
+    input: []
+    nodes: [ { name: n, runs: r } ]
+    output: [ { node: n, field: o, as: out } ]
+"""
+
+
+def _with_override(text: str):
+    return check(Pipeline.decode(safe_load(DEPLOYMENT_ONLY.replace("%OVERRIDE%", text))))
+
+
+def test_a_ref_may_state_its_own_resource_needs():
+    assert _with_override("memory: 4096, cpu: 2") == []
+
+
+@pytest.mark.parametrize(
+    "override", ['aws_credentials_dir: "/home/me/.aws"', "map_current_user: false"]
+)
+def test_a_ref_may_not_state_a_deployment_only_override(override):
+    """These describe the machine and the account running the container, not the work the
+    ref does — so a pipeline stating one would be unportable, and ignoring it silently
+    would be worse. Refs and deployments share one override class; this is the rule that
+    keeps that honest."""
+    (error,) = _with_override(override)
+    assert "deployment-only" in error
+
+
+def test_a_deployment_may_state_them():
+    """The same field, from the other side, is exactly right."""
+    from cascade.model.runner_overrides import DockerOverride
+
+    override = DockerOverride(aws_credentials_dir="~/.aws", map_current_user=False)
+    assert DockerOverride.decode(override.encode()) == override

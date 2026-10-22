@@ -25,7 +25,6 @@ from cascade.types.structures import (
     FieldDecl,
     IoConfig,
     IoDecl,
-    IOField,
     Structure,
     TypesSection,
 )
@@ -43,7 +42,6 @@ __all__ = [
     "FieldDecl",
     "IoConfig",
     "IoDecl",
-    "IOField",
     "Structure",
     "TypesSection",
 ]

@@ -10,7 +10,7 @@ from cascade.deployment import Deployment
 from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import compile_pipeline
 from cascade.plan.plan import Plan
-from cascade.engine.executor import (
+from cascade.executor import (
     Executor,
     ExecutorError,
     RunResult,

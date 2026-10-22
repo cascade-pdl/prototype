@@ -24,13 +24,11 @@ no per-node result to record — an output always lives at its node's name.
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Mapping
+from typing import Awaitable
 
 from cascade.graph import Graph
 from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
-from cascade.model.runner_kinds import RunnerKind
-from cascade.model.runner_overrides import RunnerOverrides
 from cascade.plan.plan import Plan
 from cascade.store.base import Store
 from cascade.store.registry import from_config
@@ -39,7 +37,8 @@ from cascade.protocol.binding import InputBindings, OutputDecl, OutputDecls
 from cascade.protocol.instance_path import InstancePath
 from cascade.engine.resolve import ResolveError, resolve_dag_output, resolve_node
 from cascade.protocol.run_spec import RunSpec
-from cascade.runners.registry import RunnerEnv, build_runner
+from cascade.plan.slice import slice_plan
+from cascade.runners.build import RefRunnerBuilder, configure_ref_builder
 from cascade.protocol.runner import Runner
 from cascade.protocol.coro import RunnerCoroBase
 from cascade.engine.fan import FanRunner
@@ -61,15 +60,20 @@ class DagRunner(RunnerCoroBase):
         self,
         dag: str,
         plan: Plan,
-        env: RunnerEnv | None = None,
-        overrides: Mapping[RunnerKind, RunnerOverrides] | None = None,
+        build_ref: "RefRunnerBuilder | None" = None,
     ):
+        """Coordination needs the plan and a way to build refs — nothing else.
+
+        It previously took a ``RunnerEnv`` and an overrides map, stored both, threaded
+        both through its recursion, and read neither: they existed only to reach
+        ``build_runner``. Injecting the builder puts all of that on the other side of a
+        callable, so *how* a runner is configured is no longer coordination's business.
+        """
         if dag not in plan.node_graphs:
             raise DagRunError(f"no such dag in plan: {dag!r}")
         self.dag = dag
         self.plan = plan
-        self.env = env or RunnerEnv()
-        self.overrides = dict(overrides or {})
+        self.build_ref = build_ref or configure_ref_builder()
 
     # ------------------------------------------------------------------ Runner
     def _invoke(self, spec: RunSpec) -> Awaitable[int]:
@@ -84,16 +88,18 @@ class DagRunner(RunnerCoroBase):
         """A ref becomes a spawning runner; a dag becomes another DagRunner. The
         recursion is here and nowhere else."""
         if runnable in self.plan.node_graphs:
-            return DagRunner(runnable, self.plan, self.env, self.overrides)
+            # a child gets only its own subtree. Encapsulation for its own sake -- a subdag
+            # cannot reach a sibling's config if the entry is not there -- and because a
+            # dag-in-a-container must ship a slice anyway: slicing here makes the local
+            # recursion and the remote dispatch the same operation rather than two paths.
+            # Cost is once per node dispatch, not per lane; nested dags re-slice per level.
+            return DagRunner(runnable, slice_plan(self.plan, runnable), self.build_ref)
         config = self.plan.run_config.get(runnable)
         if config is None:
             raise DagRunError(f"{runnable!r} is neither a dag nor a configured ref")
-        return build_runner(
-            config,
-            deployment_overrides=self.overrides.get(config.runner),
-            env=self.env,
-            signature=self.plan.signatures.get(runnable),
-        )
+        # the plan is this runner's own data, so looking up in it is not borrowed
+        # knowledge; what stays outside is *how* a runner is built from what we find
+        return self.build_ref(config, self.plan.signatures.get(runnable))
 
     def _lane_outputs(self, runnable: str) -> dict[str, tuple[tuple[str, ...], str]]:
         """Where each output port lands inside one lane. A ref writes at the lane

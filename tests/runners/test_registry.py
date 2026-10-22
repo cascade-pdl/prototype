@@ -2,7 +2,9 @@
 
 The interesting behaviour is the three-leg merge: ``RefData`` is never overridden,
 ref and deployment ``RunnerOverrides`` merge field-wise with the ref winning, and
-machine-local context arrives separately in ``RunnerEnv``.
+docker's own settings (credentials, user mapping) live in ``DockerOverride`` alongside its
+other settings, rather than in a general-purpose context object threaded through
+coordination that read none of it.
 """
 from typing import Any
 
@@ -17,7 +19,6 @@ from cascade.plan.signature import Port, Signature, TypeExpr
 from cascade.store.file_store import FileStore, FileConfig
 
 from cascade.runners.registry import (
-    RunnerEnv,
     build_runner,
     merge_overrides,
     RUNNER_BUILDERS,
@@ -126,7 +127,9 @@ def test_env_supplies_credentials_and_user_mapping():
     config = RunConfig(runner=RunnerKind.docker, config=RefDocker(image="x:1"))
     runner = build_runner(
         config,
-        env=RunnerEnv(aws_credentials_dir="~/.aws", map_current_user=False),
+        deployment_overrides=DockerOverride(
+            aws_credentials_dir="~/.aws", map_current_user=False
+        ),
     )
     assert runner.aws_credentials_dir == "~/.aws"
     assert runner.map_current_user is False
@@ -281,12 +284,11 @@ def test_home_is_not_forced_when_no_credentials_are_mounted(tmp_path):
 def test_home_is_set_when_credentials_are_mounted(tmp_path):
     """boto looks for ~/.aws, so the mount and HOME have to agree — and that is the only
     reason to set it."""
-    from cascade.runners.registry import RunnerEnv
     from cascade.protocol.run_spec import RunSpec
 
     runner = build_runner(
         RunConfig(runner=RunnerKind.docker, config=RefDocker(image="x:1")),
-        env=RunnerEnv(aws_credentials_dir=str(tmp_path / ".aws")),
+        deployment_overrides=DockerOverride(aws_credentials_dir=str(tmp_path / ".aws")),
     )
     cmd = runner._build_cmd(RunSpec(name="n", run_id="r"))
     home = [c.split("=", 1)[1] for c in cmd if c.startswith("HOME=")][0]
