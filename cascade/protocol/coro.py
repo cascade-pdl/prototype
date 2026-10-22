@@ -45,6 +45,16 @@ class HandleCoro(Handle):
             exit_code=result,
         )
 
+    async def kill(self) -> RunStatus:
+        if not self.task.done():
+            self.task.cancel()
+            # asyncio.wait, not ``await self.task``: it never raises the task's own
+            # CancelledError, so a cancellation aimed at *our* caller still propagates
+            await asyncio.wait({self.task})
+        if self.task.cancelled() or self.task.exception() is not None:
+            return RunStatus(running=False)
+        return RunStatus(running=False, exit_code=self.task.result())
+
 
 class RunnerCoroBase(Runner):
     """Spawns the coroutine returned by ``_invoke`` as a task. Subclasses supply

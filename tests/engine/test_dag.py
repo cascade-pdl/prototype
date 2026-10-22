@@ -357,3 +357,65 @@ async def test_a_subdag_node_resolves_its_input_through_the_alias(nested_plan, t
     # what a hypothetical downstream of 'p' would be told
     scope, key = resolve_dag_output(nested_plan, "prep", "ready")
     assert store.get_json(key, at=("p", *scope))[0]["runnable"] == "tidy"
+
+# --- fail fast: a failure stops its siblings ----------------------------------
+
+import asyncio
+
+from tests.support.processes import alive, fails_after, pid_from, posix_only, sleeper
+
+
+def _subprocess_ref(name, cmd):
+    return {"name": name, "runner": "subprocess", "config": {"cmd": cmd}, "input": [], "output": []}
+
+
+@pytest.mark.skipif(posix_only, reason="POSIX signals")
+@pytest.mark.asyncio
+async def test_a_failing_node_kills_its_running_sibling(tmp_path):
+    """Review Medium #7: the sibling used to keep running unsupervised after the dag had
+    already failed (only asyncio.run's teardown happened to kill it, from the CLI)."""
+    pidfile = tmp_path / "pid"
+    plan = compile_pipeline(Pipeline.decode({
+        "entrypoint": "main",
+        "input": [],
+        "refs": [_subprocess_ref("slow", sleeper(pidfile)), _subprocess_ref("bad", fails_after(pidfile))],
+        "dags": [{"name": "main", "input": [], "output": [], "nodes": [
+            {"name": "s", "runs": "slow"},
+            {"name": "b", "runs": "bad"},
+        ]}],
+    }))
+    store = FileStore(FileConfig(root=str(tmp_path / "store"), scope=("r1", "main")))
+
+    with pytest.raises(DagRunError, match="r1/main/b: exited 3"):
+        await asyncio.wait_for(
+            DagRunner("main", plan).run(RunSpec(name="main", run_id="r1", instance_id="r1/main", store_out=store)),
+            timeout=15,
+        )
+    assert not alive(int(pidfile.read_text()))  # dead now, with the loop still running
+
+
+@pytest.mark.skipif(posix_only, reason="POSIX signals")
+@pytest.mark.asyncio
+async def test_cancelling_a_run_kills_processes_inside_a_nested_dag(tmp_path):
+    """Ctrl-C, or a cancelled parent: the cancellation walks down through DagRunner
+    handles to the leaf process."""
+    pidfile = tmp_path / "pid"
+    plan = compile_pipeline(Pipeline.decode({
+        "entrypoint": "main",
+        "input": [],
+        "refs": [_subprocess_ref("slow", sleeper(pidfile))],
+        "dags": [
+            {"name": "inner", "input": [], "output": [], "nodes": [{"name": "s", "runs": "slow"}]},
+            {"name": "main", "input": [], "output": [], "nodes": [{"name": "i", "runs": "inner"}]},
+        ],
+    }))
+    store = FileStore(FileConfig(root=str(tmp_path / "store"), scope=("r1", "main")))
+    run = asyncio.create_task(
+        DagRunner("main", plan).run(RunSpec(name="main", run_id="r1", instance_id="r1/main", store_out=store))
+    )
+    pid = await pid_from(pidfile)
+
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    assert not alive(pid)

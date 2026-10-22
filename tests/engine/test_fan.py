@@ -344,3 +344,32 @@ async def test_a_fanned_subdag_stages_broadcast_inputs_per_lane_and_a_gathered_c
     assert store.is_collection("all", at=("s", "$in"))
     assert store.read_json("all", at=("s", "$in")) == store.read_json("dets", at=("p",))
     assert store.has("n", at=("s", "c"))
+
+
+@pytest.mark.asyncio
+async def test_a_failing_lane_stops_the_other_lanes_at_once(tmp_path):
+    """Fail fast across a fan: lane 1 fails while the others are still running; they
+    are cancelled (on ECS: stopped) instead of being waited for."""
+    stopped = []
+
+    async def lane(spec: RunSpec) -> int:
+        binding = spec.inputs.input_for("number")
+        value = spec.store_in.get_json(binding.key, at=binding.scope)
+        if value == 2:
+            await asyncio.sleep(0.02)
+            return 1
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            stopped.append(value)
+            raise
+        return 0
+
+    spec, _reader, writer = _fan_setup(tmp_path, [1, 2, 3])
+    with pytest.raises(FanError, match=r"r1/main/det/1: exited 1"):
+        await asyncio.wait_for(
+            FanRunner(child=RunnerCoro(coro=lane), scatter_port="number", outputs={"out": ((), "out")}).run(spec),
+            timeout=5,
+        )
+    assert sorted(stopped) == [1, 3]
+    assert not writer.has("out")  # a failed fan gathers nothing

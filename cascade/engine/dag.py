@@ -30,7 +30,6 @@ no per-node result to record — an output always lives at its node's name.
 """
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 from typing import Awaitable
 
@@ -50,6 +49,7 @@ from cascade.runners.build import RefRunnerBuilder, configure_ref_builder
 from cascade.protocol.runner import Runner
 from cascade.protocol.coro import RunnerCoroBase
 from cascade.engine.fan import FanRunner
+from cascade.engine.concurrency import run_all
 
 
 class DagRunError(Exception):
@@ -207,10 +207,9 @@ class DagRunner(RunnerCoroBase):
                 for name in wave
             ]
             # a wave is concurrent by construction: nothing in it depends on
-            # anything else in it
-            await asyncio.gather(
-                *(self._run_node(node, spec, path, b) for node, b in dispatches)
-            )
+            # anything else in it. What a failure does to the rest of the wave is
+            # run_all's decision (fail fast); raising here starts no later wave.
+            await run_all(self._run_node(node, spec, path, b) for node, b in dispatches)
 
         return 0
 

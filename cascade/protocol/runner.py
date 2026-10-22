@@ -4,6 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 
 from cascade.protocol.handle import Handle
+from cascade.protocol.run_status import RunStatus
 from cascade.protocol.run_spec import RunSpec
 
 
@@ -11,7 +12,15 @@ class Runner(ABC):
     """A runner implements two atoms: ``spawn`` (start the work, return a Handle)
     and the Handle's ``state`` (snapshot it). The common coordination — spawn,
     then poll state until done — is the concrete ``run`` here, written once for
-    all runner kinds."""
+    all runner kinds.
+
+    **Cancelling ``run`` stops the work.** Without this, cancelling the coroutine only
+    stops *waiting*: a process, a container or an ECS task carries on unsupervised. So
+    if the wait is interrupted for any reason (a sibling failed, the parent was
+    cancelled, Ctrl-C), the handle is killed before the interruption propagates.
+    Coordination runners are runners too, so this one rule reaches every leaf of a
+    nested run.
+    """
 
     sleep_time: int = 1
 
@@ -22,10 +31,23 @@ class Runner(ABC):
     async def run(self, spec: RunSpec) -> int:
         """Spawn, then wait for the handle to stop; return its exit code."""
         handle = await self.spawn(spec)
+        try:
+            st = await self._wait(handle)
+        except BaseException as interrupted:
+            try:
+                await handle.kill()
+            except Exception as kill_error:
+                # the interruption is the story; a failed kill is a footnote to it, but
+                # one worth seeing, since it means work may still be running
+                interrupted.add_note(f"and stopping {spec.instance_id or spec.name} failed: {kill_error!r}")
+            raise
+        return st.exit_code if st.exit_code is not None else 0
+
+    async def _wait(self, handle: Handle) -> RunStatus:
         if (st := await handle.await_done()) is not None:
-            return st.exit_code if st.exit_code is not None else 0
+            return st
         while True:
             st = await handle.state()
             if not st.running:
-                return st.exit_code if st.exit_code is not None else 0
+                return st
             await asyncio.sleep(self.sleep_time)

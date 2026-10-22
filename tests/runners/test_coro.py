@@ -68,3 +68,56 @@ async def test_exceptions_propagate_through_the_handle():
     handle = await RunnerCoro(coro=boom).spawn(spec=SPEC)
     with pytest.raises(RuntimeError):
         await handle.await_done()
+
+# --- kill --------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_kill_cancels_a_running_coroutine():
+    import asyncio
+
+    stopped = asyncio.Event()
+
+    async def forever(spec):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            stopped.set()
+
+    handle = await RunnerCoro(coro=forever).spawn(spec=SPEC)
+    await asyncio.sleep(0)  # let it start
+    status = await handle.kill()
+    assert stopped.is_set()
+    assert status.running is False and status.exit_code is None
+
+
+@pytest.mark.asyncio
+async def test_kill_after_completion_reports_the_result_and_is_idempotent():
+    async def five(spec):
+        return 5
+
+    handle = await RunnerCoro(coro=five).spawn(spec=SPEC)
+    await handle.await_done()
+    assert (await handle.kill()).exit_code == 5
+    assert (await handle.kill()).exit_code == 5
+
+
+@pytest.mark.asyncio
+async def test_cancelling_run_cancels_the_work_it_spawned():
+    """run() kills its handle when interrupted, so cancelling the waiter stops the work
+    instead of merely abandoning it."""
+    import asyncio
+
+    stopped = asyncio.Event()
+
+    async def forever(spec):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            stopped.set()
+
+    waiter = asyncio.create_task(RunnerCoro(coro=forever).run(SPEC))
+    await asyncio.sleep(0.05)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert stopped.is_set()

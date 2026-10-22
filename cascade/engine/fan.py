@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Mapping
 
+from cascade.engine.concurrency import run_all
 from cascade.protocol.binding import INPUTS_SCOPE, InputBinding, InputBindings
 from cascade.protocol.instance_path import InstancePath
 from cascade.store.collection import CollectionDescriptor
@@ -116,11 +117,16 @@ class FanRunner(RunnerCoroBase):
             )
         return binding
 
-    async def _run_lane(self, spec: RunSpec, sem: asyncio.Semaphore | None) -> int:
+    async def _run_lane(self, spec: RunSpec, sem: asyncio.Semaphore | None) -> None:
+        # a non-zero lane raises here, not after the fan: that is what lets run_all
+        # stop the other lanes at the first failure
         if sem is None:
-            return await self.child.run(spec)
-        async with sem:
-            return await self.child.run(spec)
+            code = await self.child.run(spec)
+        else:
+            async with sem:
+                code = await self.child.run(spec)
+        if code != 0:
+            raise FanError(f"{spec.instance_id}: exited {code}")
 
     # -------------------------------------------------------------------- run
     async def _run_fan(self, spec: RunSpec) -> int:
@@ -141,12 +147,9 @@ class FanRunner(RunnerCoroBase):
             lanes.append(self._lane_spec(spec, path, index, element_scope))
 
         sem = asyncio.Semaphore(self.max_concurrent) if self.max_concurrent else None
-        # gather preserves order, so lane i stays element i -- as_completed would
-        # silently destroy the correspondence the gathered collection depends on
-        codes = await asyncio.gather(*(self._run_lane(s, sem) for s in lanes))
-        for index, code in enumerate(codes):
-            if code != 0:
-                raise FanError(f"{path.lane(index)}: exited {code}")
+        # lane i stays element i because each lane writes beneath its own index, not
+        # because of completion order; run_all decides what a failure does (fail fast)
+        await run_all(self._run_lane(s, sem) for s in lanes)
 
         self._gather(spec, len(lanes))
         return 0

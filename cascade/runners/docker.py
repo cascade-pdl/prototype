@@ -1,8 +1,11 @@
 import asyncio
 import os
+import re
+import secrets
 from dataclasses import replace
 
 from cascade.protocol.runner import Runner
+from cascade.protocol.run_status import RunStatus
 from cascade.runners.process import HandleSubprocess
 from cascade.protocol.run_spec import RunSpec, to_env
 from cascade.store.base import Store
@@ -21,8 +24,36 @@ involved, and scopes are untouched, so all addressing still resolves.
 """
 
 
+def container_name(spec: RunSpec) -> str:
+    """A name to find this instance's container by: ``cascade.<instance path>.<rand>``.
+
+    The instance path makes it readable in ``docker ps``; the random suffix keeps a
+    re-run with the same ``--run-id`` from colliding with a container still stopping.
+    """
+    where = (spec.instance_id or spec.name).replace("/", ".")
+    return f"cascade.{re.sub(r'[^a-zA-Z0-9_.-]', '_', where)}.{secrets.token_hex(3)}"
+
+
 class HandleDocker(HandleSubprocess):
-    pass
+    """Killing the ``docker run`` client does not stop its container — SIGKILL cannot
+    be forwarded — so ``kill`` stops the container by name first, with the same grace
+    period, and only then settles the client."""
+
+    def __init__(self, process, name: str):
+        super().__init__(process)
+        self.name = name
+
+    async def kill(self) -> RunStatus:
+        if self._process.returncode is None:
+            stop = await asyncio.create_subprocess_exec(
+                "docker", "stop", "--time", str(int(self.kill_grace)), self.name,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            # a non-zero exit means no such container: not created yet, or already
+            # gone. Either way the client is all that is left to stop.
+            await stop.wait()
+        return await super().kill()
 
 
 class RunnerDocker(Runner):
@@ -45,8 +76,10 @@ class RunnerDocker(Runner):
         self.memory = memory
         self.cpu = cpu
 
-    def _build_cmd(self, spec: RunSpec) -> list[str]:
+    def _build_cmd(self, spec: RunSpec, name: str | None = None) -> list[str]:
         cmd = ["docker", "run", "--rm"]
+        if name is not None:
+            cmd += ["--name", name]
         if self.no_pull:
             cmd += ["--pull", "never"]
         if self.map_current_user and hasattr(os, "getuid"):
@@ -85,10 +118,12 @@ class RunnerDocker(Runner):
         return cmd
 
     async def spawn(self, spec: RunSpec) -> HandleDocker:
+        name = container_name(spec)
         return HandleDocker(
             process=await asyncio.create_subprocess_exec(
-                *self._build_cmd(spec=spec),
+                *self._build_cmd(spec=spec, name=name),
             ),
+            name=name,
         )
 
 
