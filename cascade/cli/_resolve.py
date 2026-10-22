@@ -71,7 +71,7 @@ def _project_root(args: argparse.Namespace) -> Path:
     return root
 
 
-def _config_from_project(args: argparse.Namespace) -> StoreConfig:
+def _load_deployment(args: argparse.Namespace) -> Deployment:
     try:
         project, root = find_project(args.project)
     except ProjectNotFound:
@@ -80,10 +80,21 @@ def _config_from_project(args: argparse.Namespace) -> StoreConfig:
         )
     dep_path = args.deployment or project.deployment_file(root)
     try:
-        deployment = Deployment.load(dep_path)
+        return Deployment.load(dep_path)
     except FileNotFoundError:
         raise CliError(f"deployment file not found: {dep_path}")
-    return deployment.store
+
+
+def _config_from_project(args: argparse.Namespace) -> StoreConfig:
+    return _load_deployment(args).store
+
+
+def resolve_deployment(args: argparse.Namespace) -> Deployment | None:
+    """The deployment the precedence rules select, or ``None`` under ``--backend``:
+    flags replace the deployment wholesale, runner defaults included."""
+    if args.backend:
+        return None
+    return _load_deployment(args)
 
 
 def _absolute_root(config: StoreConfig, base: Path) -> StoreConfig:

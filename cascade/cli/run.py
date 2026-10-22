@@ -19,7 +19,7 @@ from cascade.plan.plan import Plan, PlanVersionError
 from cascade.executor import Executor, ExecutorError
 from cascade.runners.build import configure_ref_builder
 from cascade.cli.errors import CliError
-from cascade.cli._resolve import add_store_flags, build_store
+from cascade.cli._resolve import add_store_flags, build_store, resolve_deployment
 
 
 def _load(path: str):
@@ -53,11 +53,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             inputs[name] = raw  # a bare string is the common case
 
     store = build_store(args)
+    deployment = resolve_deployment(args)
     # a ref's relative command resolves against the document that declared it, so the
     # same pipeline runs the same way from any working directory
-    # a ref's relative command resolves against the document that declared it, so the
-    # same pipeline runs the same way from any working directory
-    build_ref = configure_ref_builder(cwd=str(Path(args.pipeline).resolve().parent))
+    build_ref = configure_ref_builder(
+        overrides=deployment.runners if deployment else None,
+        cwd=str(Path(args.pipeline).resolve().parent),
+    )
     try:
         result = asyncio.run(
             Executor(plan, store=store, build_ref=build_ref).run(inputs=inputs, run_id=args.run_id)

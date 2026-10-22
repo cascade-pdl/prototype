@@ -369,6 +369,56 @@ def test_run_rejects_a_malformed_input_flag(echo_project, monkeypatch, capsys):
     assert "name=json-value" in capsys.readouterr().err
 
 
+def _capture_ref_builder(monkeypatch):
+    """Record the overrides `cascade run` binds into the ref builder."""
+    import cascade.cli.run as run_cmd
+
+    seen = {}
+    real = run_cmd.configure_ref_builder
+
+    def spy(overrides=None, cwd=None):
+        seen["overrides"] = overrides
+        return real(overrides=overrides, cwd=cwd)
+
+    monkeypatch.setattr(run_cmd, "configure_ref_builder", spy)
+    return seen
+
+
+def test_run_passes_the_deployments_runner_settings_to_the_builder(
+    echo_project, monkeypatch, capsys
+):
+    """Review High #3: `runners:` in deployment.yaml must reach the runners, not
+    stop at the store resolution."""
+    from cascade.model.runner_kinds import RunnerKind
+
+    with open(echo_project / "deployment.yaml", "a") as f:
+        f.write("runners:\n  docker:\n    memory: 4096\n    no_pull: false\n")
+    seen = _capture_ref_builder(monkeypatch)
+    monkeypatch.chdir(echo_project)
+
+    assert main(["run", "pipeline.yaml", "--input", 'src="x"', "--run-id", "r4"]) == 0
+    docker = seen["overrides"][RunnerKind.docker]
+    assert (docker.memory, docker.no_pull) == (4096, False)
+
+
+def test_run_with_backend_flags_ignores_the_deployment(
+    echo_project, tmp_path_factory, monkeypatch, capsys
+):
+    """Flags replace the deployment wholesale: no runner settings leak in from a
+    deployment the operator chose not to use."""
+    with open(echo_project / "deployment.yaml", "a") as f:
+        f.write("runners:\n  docker:\n    memory: 4096\n")
+    seen = _capture_ref_builder(monkeypatch)
+    monkeypatch.chdir(echo_project)
+    root = tmp_path_factory.mktemp("flags-store")
+
+    assert main([
+        "run", "pipeline.yaml", "--input", 'src="x"', "--run-id", "r5",
+        "--backend", "file", "--root", str(root),
+    ]) == 0
+    assert not seen["overrides"]
+
+
 def test_run_outside_a_project_is_a_hard_error(
     echo_project, tmp_path_factory, monkeypatch, capsys
 ):
