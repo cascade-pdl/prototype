@@ -16,6 +16,15 @@ ELEMENTS = "$el"
 engine-owned name, so no declared port can collide with it."""
 
 
+class KeyNotFound(LookupError):
+    """``get`` of a key that is not in the store — the same exception from every backend.
+
+    Without it a caller has to know which backend it holds: ``FileNotFoundError`` from a
+    file store, a botocore ``ClientError`` from S3. Code that is backend-agnostic by
+    design (the engine, the node SDK) could not handle a missing input at all.
+    """
+
+
 class StoreConfig(ABC):
 
     scope: tuple[str, ...]
@@ -49,10 +58,13 @@ class Store(ABC):
     def put(self, key: str, data: bytes, at: tuple[str, ...] = ()) -> str: ...
 
     @abstractmethod
-    def get(self, key: str, at: tuple[str, ...] = ()) -> bytes: ...
+    def get(self, key: str, at: tuple[str, ...] = ()) -> bytes:
+        """The bytes at ``key``; :class:`KeyNotFound` if there are none."""
 
     @abstractmethod
-    def has(self, key: str, at: tuple[str, ...] = ()) -> bool: ...
+    def has(self, key: str, at: tuple[str, ...] = ()) -> bool:
+        """Whether ``get`` would succeed. A prefix that only has keys beneath it is not a
+        key: S3 has no directories, so a file store must not report them either."""
 
     @abstractmethod
     def list(self, at: tuple[str, ...] = ()) -> list[str]: ...

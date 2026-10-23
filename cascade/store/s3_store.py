@@ -2,7 +2,12 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict, replace
 from typing import Any, Self
 
-from cascade.store.base import Store, StoreConfig
+from cascade.store.base import KeyNotFound, Store, StoreConfig
+
+
+_MISSING = ("404", "NoSuchKey", "NotFound")
+"""Error codes for an absent key: ``GetObject`` says ``NoSuchKey``, but ``HeadObject`` has
+no body to say it in, so botocore reports the bare status."""
 
 
 @dataclass
@@ -67,7 +72,15 @@ class S3Store(Store):
         return key
 
     def get(self, key: str, at: tuple[str, ...] = ()) -> bytes:
-        resp = self.client.get_object(Bucket=self.bucket, Key=self._build_key(key, at))
+        from botocore.exceptions import ClientError
+
+        s3_key = self._build_key(key, at)
+        try:
+            resp = self.client.get_object(Bucket=self.bucket, Key=s3_key)
+        except ClientError as e:
+            if e.response["Error"]["Code"] in _MISSING:
+                raise KeyNotFound(f"s3://{self.bucket}/{s3_key}") from None
+            raise
         return resp["Body"].read()
 
     def has(self, key: str, at: tuple[str, ...] = ()) -> bool:
@@ -77,7 +90,7 @@ class S3Store(Store):
             self.client.head_object(Bucket=self.bucket, Key=self._build_key(key, at))
             return True
         except ClientError as e:
-            if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            if e.response["Error"]["Code"] in _MISSING:
                 return False
             raise
 
@@ -102,17 +115,22 @@ class S3Store(Store):
         dst_store: "Store | None" = None,
     ) -> str:
         # same-backend fast path: server-side CopyObject (no bytes through us)
+        from botocore.exceptions import ClientError
+
         dst_store = dst_store or self
         if isinstance(dst_store, S3Store):
             if dst_store.bucket == self.bucket:
-                self.client.copy_object(
-                    Bucket=dst_store.bucket,
-                    Key=dst_store._build_key(dst_key, to_),
-                    CopySource={
-                        "Bucket": self.bucket,
-                        "Key": self._build_key(src_key, from_),
-                    },
-                )
+                src = self._build_key(src_key, from_)
+                try:
+                    self.client.copy_object(
+                        Bucket=dst_store.bucket,
+                        Key=dst_store._build_key(dst_key, to_),
+                        CopySource={"Bucket": self.bucket, "Key": src},
+                    )
+                except ClientError as e:
+                    if e.response["Error"]["Code"] in _MISSING:
+                        raise KeyNotFound(f"s3://{self.bucket}/{src}") from None
+                    raise
                 return dst_key
         return super().copy(
             src_key,

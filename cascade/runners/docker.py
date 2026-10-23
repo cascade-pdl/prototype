@@ -89,6 +89,10 @@ class RunnerDocker(Runner):
         # own filesystem and the data is discarded when it exits.
         host_roots = _file_store_roots(spec)
         if host_roots:
+            # docker creates a missing bind source itself, owned by root, which a mapped
+            # user then cannot write to. A file store no longer makes its root on
+            # construction, so make it here, as whoever runs the executor.
+            os.makedirs(host_roots[0], exist_ok=True)
             cmd += ["-v", f"{host_roots[0]}:{CONTAINER_STORE_ROOT}"]
             spec = _rerooted(spec, CONTAINER_STORE_ROOT)
 
@@ -146,7 +150,10 @@ def _file_store_roots(spec: RunSpec) -> list[str]:
 
 
 def _reroot(store: Store | None, root: str) -> Store | None:
-    """The same store, addressing the same scope, under a different root."""
+    """The same store, addressing the same scope, under a different root.
+
+    ``root`` is a path inside the container, so this relies on constructing a store
+    having no effect on the host (see ``FileStore``)."""
     if store is None or not isinstance(store.config, FileConfig):
         return store
     config = replace(store.config, root=root)

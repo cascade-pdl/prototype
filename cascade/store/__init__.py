@@ -1,3 +1,4 @@
+from .base import KeyNotFound
 from .file_store import FileStore, FileConfig
 from .s3_store import S3Store, S3Config
 from .collection import CollectionDescriptor, CollectionError
@@ -14,6 +15,7 @@ from .registry import (
 __all__ = [
     "CollectionDescriptor",
     "CollectionError",
+    "KeyNotFound",
     "FileStore",
     "FileConfig",
     "S3Store",

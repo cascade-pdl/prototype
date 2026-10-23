@@ -218,7 +218,6 @@ def _docker_for(spec_stores=True, tmp_path=None):
     return runner, spec
 
 
-@pytest.mark.skip
 def test_a_file_store_root_is_mounted_into_the_container(tmp_path):
     """Without this the container writes into its own filesystem and the data is
     discarded on exit — the run leaves only the plan the executor wrote host-side."""
@@ -231,7 +230,6 @@ def test_a_file_store_root_is_mounted_into_the_container(tmp_path):
     assert f"{root}:{CONTAINER_STORE_ROOT}" in cmd
 
 
-@pytest.mark.skip
 def test_the_container_side_is_a_posix_path_not_the_host_path(tmp_path):
     """A host path is not a valid mount target for a Linux container: `-v C:\\x:C:\\x`
     is meaningless on Windows. So the container side is a fixed POSIX path, and the store
@@ -244,7 +242,6 @@ def test_the_container_side_is_a_posix_path_not_the_host_path(tmp_path):
     assert CONTAINER_STORE_ROOT.startswith("/")
 
 
-@pytest.mark.skip
 def test_the_container_sees_the_rewritten_root(tmp_path):
     """The scope is untouched, so addressing still resolves — only the root changes."""
     import json
@@ -260,20 +257,17 @@ def test_the_container_sees_the_rewritten_root(tmp_path):
     assert store.config.scope == ("r1", "main", "n")  # unchanged
 
 
-@pytest.mark.skip
 def test_one_mount_even_though_there_are_two_stores(tmp_path):
     """Reader and writer are subscopes of one deployment store, so they share a root."""
     runner, spec = _docker_for(tmp_path=tmp_path)
     assert sum(1 for c in runner._build_cmd(spec) if c == "-v") == 1
 
 
-@pytest.mark.skip
 def test_no_mount_when_there_is_no_file_store():
     runner, spec = _docker_for(spec_stores=False)
     assert "-v" not in runner._build_cmd(spec)
 
 
-@pytest.mark.skip
 def test_home_is_not_forced_when_no_credentials_are_mounted(tmp_path):
     """Forcing HOME breaks any image that pip-installed as its own user: the packages sit
     in that user's ~/.local, and a different HOME hides them."""

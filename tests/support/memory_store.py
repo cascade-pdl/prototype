@@ -13,7 +13,7 @@ need the ``{kind, config}`` envelope use a registered backend (``FileStore``).
 """
 from __future__ import annotations
 
-from cascade.store.base import Store
+from cascade.store.base import KeyNotFound, Store
 
 
 class MemoryStore(Store):
@@ -30,7 +30,10 @@ class MemoryStore(Store):
         return key
 
     def get(self, key: str, at: tuple[str, ...] = ()) -> bytes:
-        return self._data[self._key(key, at)]
+        try:
+            return self._data[self._key(key, at)]
+        except KeyError:
+            raise KeyNotFound(self._key(key, at)) from None
 
     def has(self, key: str, at: tuple[str, ...] = ()) -> bool:
         return self._key(key, at) in self._data

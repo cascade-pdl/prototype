@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Self
 from dataclasses import dataclass, asdict, replace
 
-from cascade.store.base import Store, StoreConfig
+from cascade.store.base import KeyNotFound, Store, StoreConfig
 
 
 @dataclass
@@ -29,7 +29,13 @@ class FileConfig(StoreConfig):
 
 class FileStore(Store):
     """A local directory store. Scope is realised as nested path segments under
-    ``root`` — but that's this backend's private choice, not the contract."""
+    ``root`` — but that's this backend's private choice, not the contract.
+
+    Constructing one touches nothing: directories are made by ``put``, when there is
+    something to write. A store built only to be *described* — the docker runner
+    rerooting a spec to the container's mount point — must not create that path on the
+    host (review High #2).
+    """
 
     def __init__(
         self,
@@ -38,7 +44,6 @@ class FileStore(Store):
         self.config = config
         self.root = Path(config.root)
         self.scope = tuple(config.scope)
-        self._build_path("").parent.mkdir(parents=True, exist_ok=True)
 
     def _build_path(self, key: str | None = None, at: tuple[str, ...] = ()) -> Path:
         parts = [*self.scope, *at]
@@ -62,10 +67,14 @@ class FileStore(Store):
         key: str,
         at: tuple[str, ...] = (),
     ) -> bytes:
-        return self._build_path(key, at).read_bytes()
+        path = self._build_path(key, at)
+        try:
+            return path.read_bytes()
+        except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+            raise KeyNotFound(str(path)) from None
 
     def has(self, key: str, at: tuple[str, ...] = ()) -> bool:
-        return self._build_path(key, at).exists()
+        return self._build_path(key, at).is_file()
 
     def list(self, at: tuple[str, ...] = ()) -> list[str]:
         """List keys under a prefix (relative to the scoped root)."""

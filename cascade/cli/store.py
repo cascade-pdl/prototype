@@ -8,6 +8,7 @@ from pathlib import Path
 
 from cascade.cli.errors import CliError
 from cascade.cli._resolve import add_store_flags, build_store, at_tuple
+from cascade.store.base import KeyNotFound
 
 
 def cmd_stage(args: argparse.Namespace) -> int:
@@ -23,11 +24,13 @@ def cmd_stage(args: argparse.Namespace) -> int:
 def cmd_fetch(args: argparse.Namespace) -> int:
     store = build_store(args)
     at = at_tuple(args)
-    if not store.has(args.key, at=at):
+    try:
+        data = store.get(args.key, at=at)
+    except KeyNotFound:
         raise CliError(f"key not found in store: {args.key}")
     dst = Path(args.dest)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_bytes(store.get(args.key, at=at))
+    dst.write_bytes(data)
     print(f"fetched {args.key} -> {dst}")
     return 0
 
