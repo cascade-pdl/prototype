@@ -366,13 +366,16 @@ from tests.support.processes import alive, fails_after, pid_from, posix_only, sl
 
 
 def _subprocess_ref(name, cmd):
-    return {"name": name, "runner": "subprocess", "config": {"cmd": cmd}, "input": [], "output": []}
+    return {
+        "name": name, "runner": "subprocess", "config": {"cmd": cmd},
+        "resources": {"cpu": 1, "memory": "1GiB"}, "input": [], "output": [],
+    }
 
 
 @pytest.mark.skipif(posix_only, reason="POSIX signals")
 @pytest.mark.asyncio
 async def test_a_failing_node_kills_its_running_sibling(tmp_path):
-    """Review Medium #7: the sibling used to keep running unsupervised after the dag had
+    """The sibling used to keep running unsupervised after the dag had
     already failed (only asyncio.run's teardown happened to kill it, from the CLI)."""
     pidfile = tmp_path / "pid"
     plan = compile_pipeline(Pipeline.decode({

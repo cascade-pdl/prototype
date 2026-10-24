@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from cascade.model.runner_overrides import RunnerOverrides, parse
 from cascade.model.runner_kinds import RunnerKind
 from cascade.model.ref_data import RefData, decode
+from cascade.model.resources import Resources
 from cascade.types import IoDecl
 
 
@@ -15,9 +15,14 @@ class Ref:
     The representation of a YAML ref object
 
     note: at runtime, each runner will be instantiated merging the following:
-    * the ref override (ref specific cpu/ram limits)
     * the ref config (the docker image, the subprocess command)
-    * the declared deployment values (ecs cluster, other params)
+    * the ref's resources (minimums; the task is sized to exactly these)
+    * the backend the deployment places it on (ecs cluster, other params)
+
+    ``runner`` is derived from ``config``: the YAML tag picks the RefData class, and the
+    class is the kind from then on, so the two cannot disagree. ``requires`` names
+    capabilities a backend must ``provide`` (``www``, ``private``); it never names a
+    backend.
 
     YAML::
 
@@ -26,6 +31,8 @@ class Ref:
             runner: docker
             config:
               image: 123456789.dkr.ecr.eu-west-1.amazonaws.com/flat-bug:v3
+            resources: { cpu: 4, memory: 32GiB, gpu: 1 }
+            requires: [www]
             input:
               - { name: image, type: "io.Image" }
             output:
@@ -33,20 +40,31 @@ class Ref:
     """
 
     name: str
-    runner: RunnerKind
     config: RefData
-    overrides: RunnerOverrides | None = None
+    resources: Resources | None = None
+    requires: tuple[str, ...] = ()
     input: list[IoDecl] = field(default_factory=list)
     output: list[IoDecl] = field(default_factory=list)
+
+    @property
+    def runner(self) -> RunnerKind:
+        return self.config.kind
 
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> "Ref":
         kind = RunnerKind(raw["runner"])
+        if "overrides" in raw:
+            # a silently dropped setting would run the work some other way than written
+            raise ValueError(
+                f"ref {raw.get('name')!r}: `overrides:` was removed; sizes go in "
+                "`resources:`, machine settings in the deployment's backend config"
+            )
+        resources = raw.get("resources")
         return cls(
             name=raw["name"],
-            runner=kind,
             config=decode(kind, raw["config"]),
-            overrides=parse(kind, raw.get("overrides", None)),
+            resources=Resources.decode(resources) if resources is not None else None,
+            requires=tuple(raw.get("requires") or ()),
             input=[IoDecl.decode(i) for i in raw.get("input", [])],
             output=[IoDecl.decode(o) for o in raw.get("output", [])],
         )

@@ -21,7 +21,7 @@ import argparse
 from dataclasses import replace
 
 from cascade.project import find_project, ProjectNotFound
-from cascade.deployment import Deployment
+from cascade.deployment import Deployment, DeploymentError
 from pathlib import Path
 
 from cascade.store.base import Store, StoreConfig
@@ -83,6 +83,8 @@ def _load_deployment(args: argparse.Namespace) -> Deployment:
         return Deployment.load(dep_path)
     except FileNotFoundError:
         raise CliError(f"deployment file not found: {dep_path}")
+    except DeploymentError as e:
+        raise CliError(f"invalid deployment {dep_path}: {e}")
 
 
 def _config_from_project(args: argparse.Namespace) -> StoreConfig:
@@ -91,7 +93,7 @@ def _config_from_project(args: argparse.Namespace) -> StoreConfig:
 
 def resolve_deployment(args: argparse.Namespace) -> Deployment | None:
     """The deployment the precedence rules select, or ``None`` under ``--backend``:
-    flags replace the deployment wholesale, runner defaults included."""
+    flags replace the deployment wholesale, backends included."""
     if args.backend:
         return None
     return _load_deployment(args)

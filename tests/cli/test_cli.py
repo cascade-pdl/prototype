@@ -79,7 +79,7 @@ def test_compile_writes_a_plan(project, tmp_path):
     out = tmp_path / "out.plan.json"
     assert main(["compile", str(project / "pipeline.yaml"), "-o", str(out)]) == 0
     raw = json.loads(out.read_text())
-    assert raw["version"] == 7
+    assert raw["version"] == 8
     assert raw["dag_outputs"], "compiled plan lost dag_outputs"
 
 
@@ -369,46 +369,43 @@ def test_run_rejects_a_malformed_input_flag(echo_project, monkeypatch, capsys):
     assert "name=json-value" in capsys.readouterr().err
 
 
-def _capture_ref_builder(monkeypatch):
-    """Record the overrides `cascade run` binds into the ref builder."""
-    import cascade.cli.run as run_cmd
-
-    seen = {}
-    real = run_cmd.configure_ref_builder
-
-    def spy(overrides=None, cwd=None):
-        seen["overrides"] = overrides
-        return real(overrides=overrides, cwd=cwd)
-
-    monkeypatch.setattr(run_cmd, "configure_ref_builder", spy)
-    return seen
+UNPLACEABLE = """
+backends:
+  - name: far
+    kind: ecs
+    max: { cpu: 4, memory: 8GiB }
+    concurrency: 2
+    config: { cluster: c, subnets: [s] }
+"""
 
 
-def test_run_passes_the_deployments_runner_settings_to_the_builder(
-    echo_project, monkeypatch, capsys
-):
-    """Review High #3: `runners:` in deployment.yaml must reach the runners, not
-    stop at the store resolution."""
-    from cascade.model.runner_kinds import RunnerKind
-
+def test_run_places_against_the_deployments_backends(echo_project, monkeypatch, capsys):
+    """The deployment's backends must reach the run, not stop at the store
+    resolution. An ECS backend beside a file store cannot
+    work, and the run says so before starting anything."""
     with open(echo_project / "deployment.yaml", "a") as f:
-        f.write("runners:\n  docker:\n    memory: 4096\n    no_pull: false\n")
-    seen = _capture_ref_builder(monkeypatch)
+        f.write(UNPLACEABLE)
     monkeypatch.chdir(echo_project)
+    assert main(["run", "pipeline.yaml", "--input", 'src="x"', "--run-id", "r4"]) == 2
+    err = capsys.readouterr().err
+    assert "cannot place" in err and "file store" in err
+    assert not (echo_project / "_store" / "wilder" / "moth" / "r4").exists()
 
-    assert main(["run", "pipeline.yaml", "--input", 'src="x"', "--run-id", "r4"]) == 0
-    docker = seen["overrides"][RunnerKind.docker]
-    assert (docker.memory, docker.no_pull) == (4096, False)
+
+def test_run_writes_the_placement_beside_the_plan(echo_project, monkeypatch, capsys):
+    monkeypatch.chdir(echo_project)
+    assert main(["run", "pipeline.yaml", "--input", 'src="x"', "--run-id", "r6"]) == 0
+    run = echo_project / "_store" / "wilder" / "moth" / "r6"
+    # echo refs are never placed, so the map is empty, but it is there
+    assert json.loads((run / "placement").read_text()) == {"version": 1, "placements": []}
 
 
 def test_run_with_backend_flags_ignores_the_deployment(
     echo_project, tmp_path_factory, monkeypatch, capsys
 ):
-    """Flags replace the deployment wholesale: no runner settings leak in from a
-    deployment the operator chose not to use."""
+    """Flags replace the deployment wholesale: its backends do not leak in."""
     with open(echo_project / "deployment.yaml", "a") as f:
-        f.write("runners:\n  docker:\n    memory: 4096\n")
-    seen = _capture_ref_builder(monkeypatch)
+        f.write(UNPLACEABLE)
     monkeypatch.chdir(echo_project)
     root = tmp_path_factory.mktemp("flags-store")
 
@@ -416,7 +413,77 @@ def test_run_with_backend_flags_ignores_the_deployment(
         "run", "pipeline.yaml", "--input", 'src="x"', "--run-id", "r5",
         "--backend", "file", "--root", str(root),
     ]) == 0
-    assert not seen["overrides"]
+
+
+# --- placement ---------------------------------------------------------------
+
+PLACED_PIPELINE = """
+entrypoint: main
+input: []
+types: { structures: [] }
+refs:
+  - { name: small, runner: subprocess, config: { cmd: ["true"] },
+      resources: { cpu: 1, memory: 1GiB }, input: [], output: [ { name: o, type: string } ] }
+  - { name: big, runner: docker, config: { image: "x:1" },
+      resources: { cpu: 2, memory: 32GiB }, input: [], output: [ { name: o, type: string } ] }
+  - { name: stub, runner: echo, config: {}, input: [], output: [ { name: o, type: string } ] }
+dags:
+  - name: main
+    input: []
+    nodes: [ { name: a, runs: small }, { name: b, runs: big }, { name: c, runs: stub } ]
+    output: [ { node: a, field: o, as: out } ]
+"""
+
+PLACED_DEPLOYMENT = """
+store: { kind: s3, config: { bucket: b } }
+backends:
+  - { name: laptop, kind: local, max: { cpu: 4, memory: 16GiB } }
+  - { name: ecs-cpu, kind: ecs, max: { cpu: 16, memory: 120GiB }, concurrency: 8,
+      config: { cluster: c, subnets: [s] } }
+"""
+
+
+@pytest.fixture
+def placed(tmp_path):
+    (tmp_path / "pipeline.yaml").write_text(PLACED_PIPELINE)
+    (tmp_path / "deployment.yaml").write_text(PLACED_DEPLOYMENT)
+    return tmp_path
+
+
+def _placement(placed, *extra):
+    return main(["placement", str(placed / "pipeline.yaml"),
+                 "--deployment", str(placed / "deployment.yaml"), *extra])
+
+
+def test_placement_lists_every_placed_ref(placed, capsys):
+    assert _placement(placed) == 0
+    assert json.loads(capsys.readouterr().out) == [
+        {"ref": "small", "backend": "laptop"},
+        {"ref": "big", "backend": "ecs-cpu"},   # first fit: too big for the laptop
+    ]
+
+
+def test_placement_explains_what_was_passed_over(placed, capsys):
+    assert _placement(placed, "big", "--explain") == 0
+    assert json.loads(capsys.readouterr().out) == [{
+        "ref": "big", "backend": "ecs-cpu",
+        "skipped": {"laptop": ["memory 32GiB > max 16GiB"]},
+    }]
+
+
+def test_an_unplaceable_ref_is_listed_and_fails(placed, capsys):
+    (placed / "deployment.yaml").write_text(
+        "store: { kind: s3, config: { bucket: b } }\n"
+        "backends: [ { name: laptop, kind: local, max: { cpu: 4, memory: 16GiB } } ]\n"
+    )
+    assert _placement(placed) == 1
+    rows = json.loads(capsys.readouterr().out)
+    assert {"ref": "big", "backend": None} in rows
+
+
+def test_placement_of_an_unknown_ref(placed, capsys):
+    assert _placement(placed, "stub") == 2
+    assert "never placed" in capsys.readouterr().err
 
 
 def test_run_outside_a_project_is_a_hard_error(

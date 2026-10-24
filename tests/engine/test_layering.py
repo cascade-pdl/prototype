@@ -14,6 +14,7 @@ LAYERS = [
     "cascade.model",       # the pipeline document
     "cascade.store",       # the data plane
     "cascade.plan",        # compilation
+    "cascade.substrate",   # backends and placement: where refs run
     "cascade.protocol",    # the runtime contract: RunSpec, bindings, Runner/Handle ABCs
     "cascade.runners",     # substrate implementations
     "cascade.engine",      # coordination: DagRunner, FanRunner, resolve

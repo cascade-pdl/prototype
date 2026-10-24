@@ -26,7 +26,7 @@ container would mean shipping the plan with every task.
 list, or depth 1 that receives a scalar, is a mismatch worth failing on loudly rather
 than misinterpreting. It is *not* needed to decide how to read — ``Store.read`` resolves
 a collection descriptor whatever the declared shape — but it is what turns a silent
-misread into an error, and it is the hook the codec (item 1.7) needs to split a
+misread into an error, and it is the hook the codec needs to split a
 monolithic non-JSON collection.
 
 Until port encodings are persisted in ``Signature`` the executor cannot populate

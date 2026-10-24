@@ -38,8 +38,8 @@ pytest-asyncio = "^1.4.0"
 ruff = "^0.16.3"
 
 [tool.pytest.ini_options]
-# only the project's own suite: local copies of a tree (e.g. recovered snapshots under
-# design/) carry their own tests/ and would collide on module names
+# only the project's own suite: local copies of a tree (e.g. recovered snapshots) carry
+# their own tests/ and would collide on module names
 testpaths = ["tests"]
 
 [tool.ruff]

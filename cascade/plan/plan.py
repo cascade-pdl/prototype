@@ -24,7 +24,7 @@ from cascade.plan.type_env import TypeEnv
 from cascade.plan.run_config import RunConfig
 
 
-PLAN_VERSION = 7
+PLAN_VERSION = 8
 
 
 class PlanVersionError(Exception):

@@ -9,6 +9,7 @@ Its job is the translation: a deployment becomes a live store and a configured r
 and the engine receives neither a deployment nor a substrate, only the pieces.
 """
 from cascade.executor.executor import (
+    PLACEMENT_KEY,
     PLAN_KEY,
     RUN_INPUTS,
     Executor,
@@ -18,7 +19,10 @@ from cascade.executor.executor import (
     new_run_id,
 )
 
+from cascade.executor.placement import place
+
 __all__ = [
+    "PLACEMENT_KEY",
     "PLAN_KEY",
     "RUN_INPUTS",
     "Executor",
@@ -26,4 +30,5 @@ __all__ = [
     "RunResult",
     "execute",
     "new_run_id",
+    "place",
 ]

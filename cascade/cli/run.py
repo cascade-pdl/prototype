@@ -17,7 +17,6 @@ from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import CompileError, compile_pipeline
 from cascade.plan.plan import Plan, PlanVersionError
 from cascade.executor import Executor, ExecutorError
-from cascade.runners.build import configure_ref_builder
 from cascade.cli.errors import CliError
 from cascade.cli._resolve import add_store_flags, build_store, resolve_deployment
 
@@ -56,14 +55,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     deployment = resolve_deployment(args)
     # a ref's relative command resolves against the document that declared it, so the
     # same pipeline runs the same way from any working directory
-    build_ref = configure_ref_builder(
-        overrides=deployment.runners if deployment else None,
-        cwd=str(Path(args.pipeline).resolve().parent),
-    )
+    cwd = str(Path(args.pipeline).resolve().parent)
     try:
-        result = asyncio.run(
-            Executor(plan, store=store, build_ref=build_ref).run(inputs=inputs, run_id=args.run_id)
-        )
+        executor = Executor(plan, deployment=deployment, store=store, cwd=cwd)
+        result = asyncio.run(executor.run(inputs=inputs, run_id=args.run_id))
     except ExecutorError as e:
         raise CliError(str(e))
 

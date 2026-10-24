@@ -37,6 +37,8 @@ refs: []
 #  - name: detect
 #    runner: docker          # docker | subprocess | echo
 #    config: { image: "my-registry/detect:v1" }
+#    resources: { cpu: 1, memory: 2GiB }   # required on docker/subprocess; vCPU, unit on memory
+#    requires: []            # capabilities a backend must provide, e.g. [www]
 #    input:  [ { name: image, type: "io.Image" } ]
 #    output: [ { name: dets,  type: "Detection[]" } ]
 
@@ -77,9 +79,27 @@ store:
 #     region: eu-west-1
 #     scope: []
 
-# Deployment-level defaults per runner kind, merged under each ref's own config.
-runners: {}
-#  docker:
-#    no_pull: true           # use a locally built image
-#    memory: 2048
+# Where refs run, in order of preference: each ref goes to the first backend that can
+# run its kind, whose `max` covers its resources and whose `provides` covers its
+# `requires`. `cascade placement pipeline.yaml` shows the result.
+backends:
+  - name: local
+    kind: local             # this machine: runs docker and subprocess refs
+    max: { cpu: 4, memory: 8GiB }   # the largest task accepted here (policy, not hardware)
+    concurrency: 2          # tasks at once; keep max x concurrency within the machine
+    config:
+      no_pull: true         # use locally built images
+      map_current_user: true
+#     aws_credentials_dir: ~/.aws
+#
+# An ECS backend (needs an s3 store):
+#  - name: ecs-cpu
+#    kind: ecs
+#    max: { cpu: 16, memory: 120GiB }
+#    provides: [www]
+#    concurrency: 20
+#    config:
+#      cluster: cascade
+#      subnets: [subnet-0123]
+#      launch_type: FARGATE_SPOT
 """

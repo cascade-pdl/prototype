@@ -34,11 +34,13 @@ input:
 refs:
   - name: detect
     runner: docker
+    resources: { cpu: 1, memory: 1GiB }
     config: { image: "123.dkr.ecr.eu-west-1.amazonaws.com/flat-bug:v3" }
     input:  [ { name: image, type: "io.Image" } ]
     output: [ { name: dets,  type: "Detection[]" } ]
   - name: score
     runner: subprocess
+    resources: { cpu: 1, memory: 1GiB }
     config: { cmd: ["python", "-m", "score"] }
     input:  [ { name: d, type: "Detection" } ]
     output:

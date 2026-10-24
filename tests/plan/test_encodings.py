@@ -145,15 +145,16 @@ def test_signature_can_be_built_directly_from_ports():
     )
     assert Signature.decode(sig.encode()) == sig
 
-# --- deployment-only overrides -------------------------------------------------
+# --- overrides were removed ----------------------------------------------------
 
-DEPLOYMENT_ONLY = """
+REF_WITH_OVERRIDES = """
 entrypoint: main
 input: []
 types: { structures: [] }
 refs:
   - name: r
     runner: docker
+    resources: { cpu: 1, memory: 1GiB }
     config: { image: "x:1" }
     overrides: { %OVERRIDE% }
     input: []
@@ -166,29 +167,11 @@ dags:
 """
 
 
-def _with_override(text: str):
-    return check(Pipeline.decode(safe_load(DEPLOYMENT_ONLY.replace("%OVERRIDE%", text))))
-
-
-def test_a_ref_may_state_its_own_resource_needs():
-    assert _with_override("memory: 4096, cpu: 2") == []
-
-
 @pytest.mark.parametrize(
-    "override", ['aws_credentials_dir: "/home/me/.aws"', "map_current_user: false"]
+    "override", ["memory: 4096, cpu: 2", 'aws_credentials_dir: "/home/me/.aws"', "no_pull: true"]
 )
-def test_a_ref_may_not_state_a_deployment_only_override(override):
-    """These describe the machine and the account running the container, not the work the
-    ref does — so a pipeline stating one would be unportable, and ignoring it silently
-    would be worse. Refs and deployments share one override class; this is the rule that
-    keeps that honest."""
-    (error,) = _with_override(override)
-    assert "deployment-only" in error
-
-
-def test_a_deployment_may_state_them():
-    """The same field, from the other side, is exactly right."""
-    from cascade.model.runner_overrides import DockerOverride
-
-    override = DockerOverride(aws_credentials_dir="~/.aws", map_current_user=False)
-    assert DockerOverride.decode(override.encode()) == override
+def test_overrides_on_a_ref_are_refused_not_ignored(override):
+    """Sizes moved to `resources:` and machine settings to the deployment's backend
+    config. A ref still stating either would otherwise run some other way than written."""
+    with pytest.raises(ValueError, match="resources"):
+        Pipeline.decode(safe_load(REF_WITH_OVERRIDES.replace("%OVERRIDE%", override)))

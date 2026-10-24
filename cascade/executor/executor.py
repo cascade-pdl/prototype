@@ -3,8 +3,8 @@
 Deliberately concrete, and deliberately thin. There is no ``Executor`` ABC because
 the variation this project actually has lives one layer down: local versus remote is a
 *runner* choice, which is what "the recursion boundary is the distribution boundary"
-means. Phase 5's items are all `Runner` implementations, not alternative executors, and
-inventing a second substitution point would mean two places to ask where execution mode
+means. Remote execution (ECS, a dag in a container) is all `Runner` implementations, not
+alternative executors, and inventing a second substitution point would mean two places to ask where execution mode
 gets decided. If a genuine second implementation ever appears, extracting the interface
 is a small refactor and nothing calling ``execute`` would notice.
 
@@ -15,9 +15,12 @@ What it owns is everything that is true once per run rather than once per node:
 - **the run id** — sortable, so listing runs is chronological;
 - **the run's own inputs** — staged into ``<run>/<dag>/$in/`` and handed to the root dag
   as bindings, which is the convention the ``$input`` edges resolve against;
+- **the placement** — which backend each ref runs on, decided once from the plan and
+  the deployment before anything starts, and bound into the ref builder;
 - **the plan** — written into the run's scope, so a completed run is self-describing:
   anything rendering or auditing it later has the graph beside the data, and a remote
-  dag runner (item 5.2) has somewhere to fetch its slice from;
+  dag runner has somewhere to fetch its slice from. The placement is written
+  beside it: where each ref actually ran, even if the deployment file changes later;
 - **the result** — where the declared outputs landed, which an exit code cannot carry.
 """
 from __future__ import annotations
@@ -37,10 +40,14 @@ from cascade.protocol.instance_path import InstancePath
 from cascade.protocol.run_spec import RunSpec
 from cascade.runners.build import RefRunnerBuilder, configure_ref_builder
 from cascade.engine.dag import DagRunner
+from cascade.executor.placement import place
+from cascade.substrate.backends import uncapped_local
+from cascade.substrate.placement import PlacementError
 
 
 RUN_INPUTS = INPUTS_SCOPE
 PLAN_KEY = "plan"
+PLACEMENT_KEY = "placement"
 
 
 class ExecutorError(Exception):
@@ -89,9 +96,13 @@ class Executor:
         deployment: Deployment | None = None,
         store: Store | None = None,
         build_ref: RefRunnerBuilder | None = None,
+        cwd: str | None = None,
     ):
-        """``deployment`` supplies the store and the per-kind runner defaults; ``store``
-        overrides it directly, which is what tests and ``--backend`` flags want.
+        """``deployment`` supplies the store and the backends; ``store`` overrides the
+        store directly, which is what tests and ``--backend`` flags want. With no
+        deployment every ref runs on the uncapped local host.
+
+        Placement happens here, so a run that cannot be placed fails before it starts.
 
         ``build_ref`` is how a ref becomes a runner. Supplied here rather than assembled
         inside ``DagRunner`` so that coordination never touches configuration: the executor
@@ -103,10 +114,18 @@ class Executor:
         self.plan = plan
         self.deployment = deployment
         self._base = store if store is not None else _live(deployment.store)
+        try:
+            self.placements = place(plan, deployment)
+        except PlacementError as e:
+            raise ExecutorError(
+                "cannot place this run:\n" + "\n".join(f"  - {m}" for m in e.errors)
+            )
         # the executor is where a deployment becomes the pieces the engine needs: a live
-        # store, and a builder bound to the per-kind overrides
+        # store, and a builder bound to the placement and the backends it names
         self.build_ref = build_ref or configure_ref_builder(
-            overrides=deployment.runners if deployment else {}
+            placements=self.placements,
+            backends=deployment.backends if deployment else [uncapped_local()],
+            cwd=cwd,
         )
 
     # ------------------------------------------------------------------ inputs
@@ -165,6 +184,7 @@ class Executor:
 
         # a completed run is self-describing: the graph sits beside the data
         run_store.put_json(PLAN_KEY, self.plan.encode())
+        run_store.put_json(PLACEMENT_KEY, self.placements.encode())
 
         bindings = self._stage_inputs(dag_store, inputs or {})
 

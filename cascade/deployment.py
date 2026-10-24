@@ -2,8 +2,9 @@
 
 The substrate half of the project/deployment split. Where ``cascade.toml`` names
 the project, the deployment binds it to concrete infrastructure: the store backend
-(a local directory vs an S3 bucket) and per-runner-kind defaults (cpu/memory,
-pull policy) that the executor merges over each ref's own config at spawn time.
+(a local directory vs an S3 bucket) and an ordered list of *backends* — the places refs
+can run, each with the largest task it accepts and what it provides. Refs
+state what they need; placement matches them to the first backend that fits.
 
 The **store lives here, base scope included** — it is a substrate concern, not an
 identity one, so the same project can target different buckets/prefixes per
@@ -25,9 +26,13 @@ from typing import Any, Self
 import yaml
 
 from cascade.store.base import StoreConfig
+from cascade.store.file_store import FileConfig
 from cascade.store.registry import encode_config, decode_config
-from cascade.model.runner_kinds import RunnerKind
-from cascade.model.runner_overrides import RunnerOverrides, parse as parse_overrides
+from cascade.substrate.backends import Backend, BackendError, BackendKind
+
+
+class DeploymentError(ValueError):
+    """A deployment file that does not describe a usable environment."""
 
 
 @dataclass
@@ -35,36 +40,61 @@ class Deployment:
     """The decoded ``deployment.yaml``.
 
     ``store`` is required (a deployment with nowhere to put data is meaningless).
-    ``runners`` maps a runner kind to its deployment-level overrides — the
-    defaults leg merged under each ref's own overrides by the executor.
+    ``backends`` is ordered: placement takes the first that fits, so order is priority.
     """
 
     store: StoreConfig
     name: str | None = None
-    runners: dict[RunnerKind, RunnerOverrides] = field(default_factory=dict)
+    backends: list[Backend] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        names = [b.name for b in self.backends]
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        if duplicates:
+            raise DeploymentError(f"backend name(s) used twice: {duplicates}")
+
+    def backend(self, name: str) -> Backend | None:
+        return next((b for b in self.backends if b.name == name), None)
+
+    def check(self) -> list[str]:
+        """What is wrong with this deployment as a whole, as opposed to one entry
+        (entries are checked as they decode)."""
+        errors = []
+        if isinstance(self.store, FileConfig):
+            for b in self.backends:
+                if b.kind is BackendKind.ecs:
+                    errors.append(
+                        f"backend {b.name!r} runs on ECS, which cannot see a file store; "
+                        "use an s3 store"
+                    )
+        return errors
 
     def encode(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "store": encode_config(self.store),
-            "runners": {
-                kind.value: override.encode()
-                for kind, override in self.runners.items()
-            },
+            "backends": [b.encode() for b in self.backends],
         }
 
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> Self:
-        runners: dict[RunnerKind, RunnerOverrides] = {}
-        for key, value in (raw.get("runners") or {}).items():
-            kind = RunnerKind(key)
-            override = parse_overrides(kind, value)
-            if override is not None:  # kinds without overrides parse to None
-                runners[kind] = override
+        if "runners" in raw:
+            # a silently ignored block would run the work with settings nobody chose
+            raise DeploymentError(
+                "`runners:` was replaced by `backends:`: local docker settings "
+                "go in a `kind: local` backend's config, sizes in each ref's `resources:`"
+            )
+        unknown = set(raw) - {"name", "store", "backends"}
+        if unknown:
+            raise DeploymentError(f"unknown deployment field(s): {sorted(unknown)}")
+        try:
+            backends = [Backend.decode(b) for b in raw.get("backends") or ()]
+        except BackendError as e:
+            raise DeploymentError(str(e))
         return cls(
             store=decode_config(raw["store"]),
             name=raw.get("name"),
-            runners=runners,
+            backends=backends,
         )
 
     @classmethod

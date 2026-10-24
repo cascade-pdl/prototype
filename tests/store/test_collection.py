@@ -175,7 +175,7 @@ def test_is_collection_is_safe_on_binary(store):
 
 def test_width_of_opaque_bytes_is_a_clear_error(store):
     """A monolithic non-JSON collection cannot be measured without the port's declared
-    encoding, which is the engine's knowledge, not the store's (item 1.7)."""
+    encoding, which is the engine's knowledge, not the store's."""
     store.put("blob", b"a,b,c\n1,2,3\n")
     with pytest.raises(CollectionError, match="opaque bytes"):
         store.width("blob")

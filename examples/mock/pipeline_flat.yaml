@@ -14,12 +14,14 @@ input: []
 refs:
   - name: source
     runner: subprocess
+    resources: { cpu: 0.5, memory: 256MiB }
     config: { cmd: ["python", "mock_source.py"] }
     input: []
     output: [ { name: numbers, type: "int[]" } ]
 
   - name: detect
     runner: subprocess
+    resources: { cpu: 0.5, memory: 256MiB }
     config: { cmd: ["python", "mock_detect.py"] }
     input:  [ { name: numbers,    type: "int[]" } ]
     output: [ { name: detections, type: "Detection[]" } ]

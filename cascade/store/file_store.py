@@ -34,7 +34,7 @@ class FileStore(Store):
     Constructing one touches nothing: directories are made by ``put``, when there is
     something to write. A store built only to be *described* — the docker runner
     rerooting a spec to the container's mount point — must not create that path on the
-    host (review High #2).
+    host.
     """
 
     def __init__(

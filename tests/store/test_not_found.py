@@ -45,7 +45,7 @@ def test_file_store_prefix_is_not_a_key(tmp_path):
 
 
 def test_file_store_construction_touches_nothing(tmp_path):
-    """Review High #2: the docker runner builds a store rooted at the *container's*
+    """The docker runner builds a store rooted at the *container's*
     mount point; constructing it must not create that path on the host."""
     root = tmp_path / "nowhere"
     FileStore(FileConfig(root=str(root), scope=("a", "b")))

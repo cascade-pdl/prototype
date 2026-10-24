@@ -18,6 +18,7 @@ from cascade.graph import Graph
 from cascade.model.pipeline import Pipeline
 from cascade.model.dag_node import DagNode
 from cascade.model.dependency import Dependency
+from cascade.model.runner_kinds import RunnerKind
 from cascade.plan.signature import Signature, TypeExpr
 from cascade.plan.type_env import TypeEnv
 from cascade.types import DataFormat, check_annotation
@@ -34,7 +35,7 @@ def validate_edges(
     errors: list[str] = []
 
     errors += _check_reserved_names(pipeline)
-    errors += _check_ref_overrides(pipeline)
+    errors += _check_ref_resources(pipeline)
     errors += _check_encodings(pipeline)
 
     if type_env is not None:
@@ -205,22 +206,26 @@ def _check_encodings(pipeline: Pipeline) -> list[str]:
     return errors
 
 
-def _check_ref_overrides(pipeline: Pipeline) -> list[str]:
-    """A ref may not state a *deployment-only* override.
+def _check_ref_resources(pipeline: Pipeline) -> list[str]:
+    """Work states what it needs; a stub states nothing.
 
-    ``aws_credentials_dir`` and ``map_current_user`` describe the machine and the account
-    running the container, not the work the ref does — so a pipeline stating one would be
-    unportable, and silently ignoring it would be worse. Refs and deployments share one
-    override class, and this is the rule that keeps that honest.
+    Required rather than defaulted: an unstated size would mean "uncapped" on local docker
+    and "the smallest task" on ECS, so the same ref would pass on a laptop and run out of
+    memory in production. ``echo`` refs do no work and are never placed, so a size or a
+    capability on one would be believed and ignored.
     """
     errors: list[str] = []
     for ref in pipeline.refs:
-        if ref.overrides is None:
-            continue
-        for name in sorted(type(ref.overrides).deployment_only):
-            if getattr(ref.overrides, name, None) is not None:
-                errors.append(
-                    f"ref {ref.name!r}: override {name!r} is deployment-only — it "
-                    "describes the machine, not the ref, so it belongs in deployment.yaml"
-                )
+        if ref.runner is RunnerKind.echo:
+            for name in ("resources", "requires"):
+                if getattr(ref, name):
+                    errors.append(
+                        f"ref {ref.name!r}: an echo ref is a stub and is never placed, "
+                        f"so {name!r} would be ignored"
+                    )
+        elif ref.resources is None:
+            errors.append(
+                f"ref {ref.name!r}: a {ref.runner.value} ref must state "
+                "`resources: {cpu, memory}` (cpu in vCPU, memory with a unit, e.g. 4GiB)"
+            )
     return errors

@@ -1,4 +1,4 @@
-# Local development: a file store beside the project, no runner overrides.
+# Local development: a file store beside the project, everything on this machine.
 name: local
 
 store:
@@ -7,4 +7,8 @@ store:
     root: ./_store
     scope: [mock]
 
-runners: {}
+backends:
+  - name: local
+    kind: local
+    max: { cpu: 4, memory: 8GiB }
+    concurrency: 4

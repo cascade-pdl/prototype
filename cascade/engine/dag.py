@@ -116,7 +116,7 @@ class DagRunner(RunnerCoroBase):
             raise DagRunError(f"{runnable!r} is neither a dag nor a configured ref")
         # the plan is this runner's own data, so looking up in it is not borrowed
         # knowledge; what stays outside is *how* a runner is built from what we find
-        return self.build_ref(config, self.plan.signatures.get(runnable))
+        return self.build_ref(runnable, config, self.plan.signatures.get(runnable))
 
     def _lane_outputs(self, runnable: str) -> dict[str, tuple[tuple[str, ...], str]]:
         """Where each output port lands inside one lane. A ref writes at the lane

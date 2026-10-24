@@ -66,8 +66,11 @@ class RunnerDocker(Runner):
         map_current_user: bool = True,
         aws_credentials_dir: str | None = None,
         memory: int | None = None,
-        cpu: int | None = None,
+        cpu: float | None = None,
+        gpu: int = 0,
     ):
+        """``memory`` in MiB, ``cpu`` in vCPU, ``gpu`` a count: the ref's resources,
+        which on docker are the allocation as well as the minimum."""
         self.image = image
         self.no_pull = no_pull
         self.extra_args = extra_args or []
@@ -75,6 +78,7 @@ class RunnerDocker(Runner):
         self.aws_credentials_dir = aws_credentials_dir
         self.memory = memory
         self.cpu = cpu
+        self.gpu = gpu
 
     def _build_cmd(self, spec: RunSpec, name: str | None = None) -> list[str]:
         cmd = ["docker", "run", "--rm"]
@@ -107,13 +111,14 @@ class RunnerDocker(Runner):
             cmd += ["-v", f"{host_aws}:{home}/.aws:ro"]
             env["HOME"] = home
 
-        # resource limits, when the deployment or ref asked for them. NOTE: the model does
-        # not specify units for `cpu` -- read here as whole CPUs, which will need
-        # reconciling with ECS (where 1024 == 1 vCPU) in phase 5.
+        # the ref's resources: hard caps, so a task that outgrows them fails here the
+        # way it would on ECS
         if self.memory is not None:
             cmd += ["--memory", f"{self.memory}m"]
         if self.cpu is not None:
-            cmd += ["--cpus", str(self.cpu)]
+            cmd += ["--cpus", f"{self.cpu:g}"]
+        if self.gpu:
+            cmd += ["--gpus", str(self.gpu)]
 
         for k, v in env.items():
             cmd += ["-e", f"{k}={v}"]

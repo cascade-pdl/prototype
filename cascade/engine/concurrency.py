@@ -12,7 +12,7 @@ running beside it, and cancellation reaches the substrate because ``Runner.run``
 its handle when interrupted — so a failed lane in a 1,000-wide ECS fan stops the other
 999 tasks rather than paying for them. Ctrl-C and a cancelled parent take the same path.
 
-**Drain** is the planned alternative (design ADR 0007): start nothing new, let what is
+**Drain** is the planned alternative: start nothing new, let what is
 in flight finish, then fail with the first error. It only pays once resume skips
 completed nodes via their ``$done`` markers — until then the drained work would be
 thrown away by the re-run anyway. It belongs here, as a second branch of ``run_all``
