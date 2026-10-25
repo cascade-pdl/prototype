@@ -35,6 +35,23 @@ executor importing `Plan` pulls in data definitions only.
     wire = json.dumps(plan.encode())          # ship to the executor
     plan = Plan.decode(json.loads(wire))      # rebuild the far side
 
+## The bundle: cascade inside images that don't have it
+
+A ref's image needs no cascade inside. `bundle/build.sh` builds a self-contained
+`/opt/cascade` (a musl CPython that carries its own loader, so it runs in glibc, musl
+and `FROM scratch` images alike) into `dist/bundle/`. Inside a container,
+
+    /opt/cascade/bin/cascade node wrap -- <the image's own command...>
+
+stages the node's inputs under `/cascade/inputs`, runs the command, and on success
+collects `/cascade/outputs` into the store and marks the node done. The command's exit
+code is passed through; stop signals are forwarded to it.
+
+    bundle/build.sh
+    CASCADE_BUNDLE=dist/bundle/opt-cascade poetry run pytest -q tests/cli/test_bundle.py
+
+Runners do not use the bundle yet.
+
 ## Not yet built (deliberate)
 
 - Type *identity* validation is name + arity only — exact match, no subtyping.

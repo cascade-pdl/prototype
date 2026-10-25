@@ -29,6 +29,8 @@ tools also argue against scattering them: one invocation over N images beats N m
 
 from cascade.node.codec import encode, decode, CodecError
 from cascade.node.node import NodeError, Node, from_env, session
+from cascade.node.process import run_command
+from cascade.node.wrap import run_wrapped
 
 
 __all__ = [
@@ -39,4 +41,6 @@ __all__ = [
     "Node",
     "from_env",
     "session",
+    "run_command",
+    "run_wrapped",
 ]

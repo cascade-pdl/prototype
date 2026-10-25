@@ -308,3 +308,63 @@ def test_session_accepts_os_environ(spec, tmp_path):
     import os
 
     assert isinstance(from_env(os.environ), Node)
+
+# --- files, for unmodified tools ----------------------------------------------
+
+def test_stage_inputs_stages_a_collection_as_one_file_per_element(env):
+    n = from_env(env)
+    [(port, path)] = n.stage_inputs()
+    assert port == "images"
+    assert path == n.root / "inputs" / "images"
+    assert sorted(p.name for p in path.iterdir()) == ["0.json", "1.json", "2.json"]
+    assert json.loads((path / "1.json").read_text()) == {"id": 1}
+
+
+def test_stage_inputs_can_stage_a_collection_as_one_file(env):
+    n = from_env(env)
+    [(_, path)] = n.stage_inputs(collections="file")
+    assert path.is_file()
+    assert json.loads(path.read_text()) == [{"id": i} for i in range(3)]
+
+
+def test_stage_inputs_refuses_an_unknown_collection_mode(env):
+    with pytest.raises(ValueError, match="'dir' or 'file'"):
+        from_env(env).stage_inputs(collections="zip")
+
+
+def test_collect_outputs_stores_a_directory_as_a_collection_then_marks_done(stores, env):
+    _, writer = stores
+    n = from_env(env)
+    produced = n.outputs_dir / "dets"
+    produced.mkdir(parents=True)
+    for i in range(2):
+        (produced / f"{i}.json").write_text(json.dumps({"score": i}))
+    assert n.collect_outputs() == [("dets", produced)]
+    assert writer.get_json("dets") == [{"score": 0}, {"score": 1}]
+    assert writer.has(DONE_MARKER)
+
+
+def test_collect_outputs_stores_a_file_as_one_value(stores, env):
+    _, writer = stores
+    n = from_env(env)
+    n.outputs_dir.mkdir(parents=True)
+    (n.outputs_dir / "dets").write_text(json.dumps([{"score": 1}]))
+    n.collect_outputs()
+    assert writer.get_json("dets") == [{"score": 1}]
+    assert writer.has(DONE_MARKER)
+
+
+def test_a_missing_output_is_named_and_leaves_no_marker(stores, env):
+    _, writer = stores
+    n = from_env(env)
+    with pytest.raises(NodeError, match=r"'dets' not found at .*/outputs/dets"):
+        n.collect_outputs()
+    assert not writer.has(DONE_MARKER)
+
+
+def test_collecting_with_no_declared_outputs_is_refused(spec, tmp_path):
+    from dataclasses import replace
+
+    n = from_env(_env(replace(spec, outputs=OutputDecls(())), tmp_path))
+    with pytest.raises(NodeError, match="no output ports declared"):
+        n.collect_outputs()

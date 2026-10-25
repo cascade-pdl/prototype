@@ -160,6 +160,64 @@ class Node:
         )
         self._written.append(port)
 
+    # -------------------------------------------------- files, for unmodified tools
+    # A tool that knows nothing of cascade reads ``<root>/inputs/<port>`` and writes
+    # ``<root>/outputs/<port>``. These two calls are the whole of cascade's side of that
+    # agreement: everything in before the tool runs, everything out after it.
+
+    @property
+    def outputs_dir(self) -> Path:
+        """Where a tool writes its outputs, one file or directory per port."""
+        return self.root / "outputs"
+
+    def stage_inputs(self, collections: str = "dir") -> list[tuple[str, Path]]:
+        """Stage every bound input under ``<root>/inputs/<port>``.
+
+        A collection becomes a directory of one file per element (``dir``), or a single
+        file holding the whole list with ``collections="file"``; anything else is one
+        file (``path``). Returns ``(port, path)`` per input, in binding order.
+        """
+        if collections not in ("dir", "file"):
+            raise ValueError(f"collections must be 'dir' or 'file', not {collections!r}")
+        staged = []
+        for binding in self.inputs.inputs:
+            if binding.depth > 0 and collections == "dir":
+                staged.append((binding.port, self.dir(binding.port)))
+            else:
+                staged.append((binding.port, self.path(binding.port)))
+        return staged
+
+    def collect_outputs(self) -> list[tuple[str, Path]]:
+        """Store every declared output from ``<root>/outputs/<port>``, then mark done.
+
+        A directory is collected as a collection (``write_dir``), a file as one value
+        (``write_file``). The marker is written in the same call, last, so the outputs and
+        the marker cannot disagree. Returns ``(port, path)`` per output, in declared
+        order.
+
+        Inside ``session`` the marker is written again on a clean exit; that rewrite is the
+        same content, so it is harmless.
+        """
+        if not self.outputs.ports:
+            raise NodeError(
+                "no output ports declared; the runner sets CASCADE_OUTPUTS from the plan"
+            )
+        collected = []
+        for decl in self.outputs.outputs:
+            produced = self.outputs_dir / decl.port
+            if produced.is_dir():
+                self.write_dir(decl.port, produced)
+            elif produced.is_file():
+                self.write_file(decl.port, produced)
+            else:
+                raise NodeError(
+                    f"declared output {decl.port!r} not found at {produced} — a ref must "
+                    f"write each output port to {self.outputs_dir}/<port>"
+                )
+            collected.append((decl.port, produced))
+        self.done()
+        return collected
+
     # --------------------------------------------------------------- lifecycle
     def done(self) -> None:
         """Write the completion marker, last.
