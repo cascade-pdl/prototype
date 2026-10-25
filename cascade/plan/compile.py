@@ -16,7 +16,12 @@ slicing.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from cascade.graph import GraphError
+from cascade.model.dag import Dag
+from cascade.model.dag_node import DagNode
+from cascade.model.dependency import Dependency
 from cascade.model.pipeline import Pipeline
 from cascade.plan.build import build_call_and_node_graphs
 from cascade.plan.elaborate import elaborate, ElaborationError
@@ -32,10 +37,44 @@ class CompileError(Exception):
         super().__init__("; ".join(errors))
 
 
+ENTRY_DAG = "main"
+"""The implicit dag a ref entrypoint runs in. The executor runs dags only, and the store
+lays a run out under its entrypoint dag (``<run>/main/<node>/...``), so a single ref is
+given the same shape as any pipeline rather than a special case of its own."""
+
+
+def _ref_entrypoint_as_dag(pipeline: Pipeline) -> tuple[Pipeline, list[str]]:
+    """A pipeline whose entrypoint names a ref, rewritten to run it in a one-node dag.
+
+    The node is named after the ref; the ref's inputs become the dag's inputs and its
+    outputs the dag's outputs, so the run takes and returns exactly what the ref does.
+    Anything else is returned unchanged.
+    """
+    ref = pipeline.find_ref(pipeline.entrypoint)
+    if ref is None:
+        return pipeline, []
+    if pipeline.find(ENTRY_DAG) is not None:
+        return pipeline, [
+            f"entrypoint {ref.name!r} is a ref, which runs in an implicit dag named "
+            f"{ENTRY_DAG!r}, but a runnable is already called {ENTRY_DAG!r}; rename it"
+        ]
+    dag = Dag(
+        name=ENTRY_DAG,
+        nodes=[DagNode(
+            name=ref.name,
+            depends_on=[Dependency(node="$input", field=p.name, as_=p.name) for p in ref.input],
+        )],
+        input=list(ref.input),
+        output=[Dependency(node=ref.name, field=p.name, as_=p.name) for p in ref.output],
+    )
+    return replace(pipeline, entrypoint=ENTRY_DAG, dags=[*pipeline.dags, dag]), []
+
+
 def compile_pipeline(pipeline: Pipeline) -> Plan:
     errors = check(pipeline)
     if errors:
         raise CompileError(errors)
+    pipeline, _ = _ref_entrypoint_as_dag(pipeline)
     # safe to build the artifacts now; check() already proved they derive
     order, node_graphs = build_call_and_node_graphs(pipeline)
     signatures = elaborate(pipeline, node_graphs, order)
@@ -56,6 +95,9 @@ def check(pipeline: Pipeline) -> list[str]:
     """Validate without raising; returns a list of error messages (empty = OK)."""
     if pipeline.find(pipeline.entrypoint) is None:
         return [f"entrypoint {pipeline.entrypoint!r} names no ref or dag"]
+    pipeline, errors = _ref_entrypoint_as_dag(pipeline)
+    if errors:
+        return errors
     try:
         order, node_graphs = build_call_and_node_graphs(pipeline)  # structural
         signatures = elaborate(pipeline, node_graphs, order)        # shape + arity

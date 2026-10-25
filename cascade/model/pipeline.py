@@ -12,7 +12,8 @@ from cascade.model.refs import Ref
 class Pipeline:
     """A pipeline is a namespace of runnables (refs and dags) plus a declared
     ``entrypoint`` naming the one to run. The entrypoint may be a ref (run a unit
-    in isolation) or a dag (run a graph) — they are interchangeable by name."""
+    in isolation) or a dag (run a graph) — they are interchangeable by name. A ref
+    entrypoint is compiled into an implicit one-node dag named ``main``."""
 
     entrypoint: str
     refs: list[Ref] = field(default_factory=list)
