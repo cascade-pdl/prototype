@@ -21,9 +21,9 @@ types: { structures: [] }
 refs:
   - { name: tidy, runner: subprocess, config: { cmd: ["true"] },
       resources: { cpu: 1, memory: 2GiB }, input: [], output: [ { name: o, type: string } ] }
-  - { name: classify, runner: docker, config: { image: "c:1" },
+  - { name: classify, runner: docker, config: { image: "c:1", wrap: false },
       resources: { cpu: 4, memory: 32GiB }, input: [], output: [ { name: o, type: string } ] }
-  - { name: flat-bug, runner: docker, config: { image: "f:1" },
+  - { name: flat-bug, runner: docker, config: { image: "f:1", wrap: false },
       resources: { cpu: 4, memory: 16GiB, gpu: 1 }, requires: [www],
       input: [], output: [ { name: o, type: string } ] }
   - { name: stub, runner: echo, config: {}, input: [], output: [ { name: o, type: string } ] }
@@ -135,3 +135,57 @@ def test_an_unplaceable_run_fails_at_construction(plan):
 def test_no_deployment_runs_everything_locally(plan):
     executor = Executor(plan, store=MemoryStore())
     assert {p.backend for p in executor.placements} == {"local"}
+
+
+# --- the bundle a wrapped docker ref needs ------------------------------------
+
+WRAPPED = """
+entrypoint: main
+input: []
+types: { structures: [] }
+refs:
+  - { name: raw, runner: docker, config: { image: "python:3.13-slim" },
+      resources: { cpu: 1, memory: 1GiB }, input: [], output: [ { name: o, type: string } ] }
+  - { name: sdk, runner: docker, config: { image: "mine:1", wrap: false },
+      resources: { cpu: 1, memory: 1GiB }, input: [], output: [ { name: o, type: string } ] }
+dags:
+  - name: main
+    input: []
+    nodes: [ { name: a, runs: raw }, { name: b, runs: sdk } ]
+    output: [ { node: a, field: o, as: out } ]
+"""
+
+
+@pytest.fixture
+def wrapped_plan():
+    return compile_pipeline(Pipeline.decode(safe_load(WRAPPED)))
+
+
+def with_bundle(name="local", bundle="dist/bundle/opt-cascade"):
+    return Backend(name=name, kind=BackendKind.local, max=Resources(8, 16384),
+                   config=LocalConfig(bundle=bundle), provides=frozenset())
+
+
+def test_a_wrapped_docker_ref_on_a_local_backend_without_a_bundle_is_refused(wrapped_plan):
+    """Found before anything runs, naming the wrapped refs only: ``sdk`` speaks the
+    protocol itself and needs no bundle."""
+    with pytest.raises(PlacementError) as e:
+        place(wrapped_plan, _deployment("file", [local()]))
+    [error] = e.value.errors
+    assert "['raw']" in error and "no `bundle`" in error
+
+
+def test_a_local_backend_with_a_bundle_runs_wrapped_refs(wrapped_plan):
+    placed = place(wrapped_plan, _deployment("file", [with_bundle()]))
+    assert placed.backend_of("raw") == placed.backend_of("sdk") == "local"
+
+
+def test_no_deployment_has_no_bundle_either(wrapped_plan):
+    with pytest.raises(PlacementError, match="no `bundle`"):
+        place(wrapped_plan, None)
+
+
+def test_an_ecs_backend_is_not_asked_for_a_local_bundle(wrapped_plan):
+    """On ECS the bundle is appended to the image, not mounted from this host."""
+    placed = place(wrapped_plan, _deployment("s3", [ecs("ecs-cpu")]))
+    assert placed.backend_of("raw") == "ecs-cpu"

@@ -1,0 +1,48 @@
+# Two refs on a stock Python image that knows nothing about cascade. Each command only
+# reads /cascade/inputs/<port> and writes /cascade/outputs/<port>; cascade's bundle,
+# mounted into the container by the local backend, stages and collects around it.
+#
+#   gen      writes five numbers
+#   add-one  is scattered over them: one container per number
+#
+# Run it (after bundle/build.sh, from this directory):  cascade run pipeline.yaml
+entrypoint: main
+
+input: []
+
+refs:
+  - name: gen
+    runner: docker
+    resources: { cpu: 0.25, memory: 256MiB }
+    config:
+      image: python:3.13-slim
+      command:
+        - python3
+        - -c
+        - "import json; json.dump(list(range(5)), open('/cascade/outputs/numbers', 'w'))"
+    input: []
+    output: [ { name: numbers, type: "int[]" } ]
+
+  - name: add-one
+    runner: docker
+    resources: { cpu: 0.25, memory: 256MiB }
+    config:
+      image: python:3.13-slim
+      command:
+        - python3
+        - -c
+        - "import json; n = json.load(open('/cascade/inputs/n')); json.dump(n + 1, open('/cascade/outputs/m', 'w'))"
+    input:  [ { name: n, type: int } ]
+    output: [ { name: m, type: int } ]
+
+dags:
+  - name: main
+    input: []
+    nodes:
+      - name: gen
+        runs: gen
+      - name: add
+        runs: add-one
+        scatter: n
+        depends_on: [ { node: gen, field: numbers, as: n } ]
+    output: [ { node: add, field: m, as: result } ]

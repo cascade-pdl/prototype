@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import os
+import sys
+import shutil
 import asyncio
+import tempfile
 from asyncio.subprocess import Process
 from contextlib import suppress
 
+from cascade.protocol.bundle import wrap_args
 from cascade.protocol.runner import Runner
 from cascade.protocol.run_spec import RunSpec, to_env
 from cascade.protocol.coro import HandleCoro
@@ -18,9 +22,19 @@ class HandleSubprocess(HandleCoro):
 
     kill_grace: float = 5.0
 
-    def __init__(self, process: Process):
+    def __init__(self, process: Process, scratch: str | None = None):
+        """``scratch``: a directory that belongs to this process alone, removed once it
+        has exited, however it ends."""
         self._process = process
-        super().__init__(task=asyncio.create_task(self._process.wait()))
+        self._scratch = scratch
+        super().__init__(task=asyncio.create_task(self._wait_and_tidy()))
+
+    async def _wait_and_tidy(self) -> int:
+        try:
+            return await self._process.wait()
+        finally:
+            if self._scratch is not None:
+                shutil.rmtree(self._scratch, ignore_errors=True)
 
     async def kill(self) -> RunStatus:
         if self._process.returncode is None:
@@ -39,15 +53,31 @@ class HandleSubprocess(HandleCoro):
 
 
 class RunnerSubprocess(Runner):
-    def __init__(self, cmd: list[str], cwd: str | None = None):
+    """A command on this host, in ``cwd``.
+
+    **Wrapped** (``wrap``): run under ``cascade node wrap``, by this same interpreter, with
+    a fresh staging directory as ``CASCADE_ROOT``: the command reads
+    ``$CASCADE_ROOT/inputs/<port>`` and writes ``$CASCADE_ROOT/outputs/<port>``, exactly as
+    a wrapped container does under ``/cascade``. The directory is removed when the process
+    ends. **Unwrapped**: the command speaks the protocol itself (the node SDK).
+    """
+
+    def __init__(self, cmd: list[str], cwd: str | None = None, wrap: bool = False):
         self.cmd = cmd
         self.cwd = cwd
+        self.wrap = wrap
 
     async def spawn(self, spec: RunSpec):
-        return HandleSubprocess(
-            process=await asyncio.create_subprocess_exec(
-                *self.cmd,
-                cwd=self.cwd,
-                env={**os.environ, **to_env(spec)},
-            ),
-        )
+        env = {**os.environ, **to_env(spec)}
+        argv, scratch = list(self.cmd), None
+        if self.wrap:
+            scratch = tempfile.mkdtemp(prefix="cascade-")
+            env["CASCADE_ROOT"] = scratch
+            argv = [sys.executable, "-m", "cascade.cli", *wrap_args(self.cmd)]
+        try:
+            process = await asyncio.create_subprocess_exec(*argv, cwd=self.cwd, env=env)
+        except BaseException:
+            if scratch is not None:
+                shutil.rmtree(scratch, ignore_errors=True)
+            raise
+        return HandleSubprocess(process=process, scratch=scratch)

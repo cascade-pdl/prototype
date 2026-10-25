@@ -1,3 +1,4 @@
+import os
 import sys
 
 import pytest
@@ -75,3 +76,48 @@ async def test_cancelling_run_kills_the_process(tmp_path):
     with pytest.raises(asyncio.CancelledError):
         await waiter
     assert not alive(pid)
+
+
+# --- wrapped: the same hooks as a container, on this host ---------------------
+
+from cascade.node.node import DONE_MARKER  # noqa: E402
+from cascade.protocol.binding import OutputDecl, OutputDecls  # noqa: E402
+from cascade.store.file_store import FileConfig, FileStore  # noqa: E402
+from cascade.types import TypeExpr  # noqa: E402
+
+
+def _spec(tmp_path):
+    store = FileStore(FileConfig(root=str(tmp_path / "store"), scope=("r1", "n")))
+    return store, RunSpec(
+        name="n", run_id="r1", instance_id="r1/n", store_out=store,
+        outputs=OutputDecls((OutputDecl("o", TypeExpr.parse("int")),)),
+    )
+
+
+def _tool(tmp_path, exit_code=0):
+    """Writes 7 to its output port and records where its staging root was."""
+    seen = tmp_path / "root-was"
+    return [sys.executable, "-c",
+            "import os, pathlib; r = pathlib.Path(os.environ['CASCADE_ROOT']); "
+            f"pathlib.Path({str(seen)!r}).write_text(str(r)); "
+            "(r / 'outputs' / 'o').write_text('7'); "
+            f"raise SystemExit({exit_code})"], seen
+
+
+@pytest.mark.asyncio
+async def test_a_wrapped_command_reads_and_writes_files_under_its_own_root(tmp_path):
+    store, spec = _spec(tmp_path)
+    cmd, seen = _tool(tmp_path)
+    assert await RunnerSubprocess(cmd=cmd, cwd=str(tmp_path), wrap=True).run(spec) == 0
+    assert store.get_json("o") == 7
+    assert store.has(DONE_MARKER)
+    assert not os.path.exists(seen.read_text())  # the staging root is removed afterwards
+
+
+@pytest.mark.asyncio
+async def test_a_failed_wrapped_command_marks_nothing_and_still_tidies_up(tmp_path):
+    store, spec = _spec(tmp_path)
+    cmd, seen = _tool(tmp_path, exit_code=4)
+    assert await RunnerSubprocess(cmd=cmd, cwd=str(tmp_path), wrap=True).run(spec) == 4
+    assert not store.has(DONE_MARKER)
+    assert not os.path.exists(seen.read_text())

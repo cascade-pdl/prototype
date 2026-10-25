@@ -1,5 +1,8 @@
 # The same two refs without the fan: detect takes the whole int[] in one call.
 # Runs today, and exercises the full subprocess + local store path end to end.
+#
+# Its scripts use the node SDK directly (`cascade.node`), so each ref says
+# `wrap: false`: cascade must not stage and collect around a script that does it itself.
 entrypoint: main
 
 types:
@@ -15,14 +18,14 @@ refs:
   - name: source
     runner: subprocess
     resources: { cpu: 0.5, memory: 256MiB }
-    config: { cmd: ["python", "mock_source.py"] }
+    config: { cmd: ["python", "mock_source.py"], wrap: false }
     input: []
     output: [ { name: numbers, type: "int[]" } ]
 
   - name: detect
     runner: subprocess
     resources: { cpu: 0.5, memory: 256MiB }
-    config: { cmd: ["python", "mock_detect.py"] }
+    config: { cmd: ["python", "mock_detect.py"], wrap: false }
     input:  [ { name: numbers,    type: "int[]" } ]
     output: [ { name: detections, type: "Detection[]" } ]
 

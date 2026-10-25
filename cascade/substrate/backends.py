@@ -53,14 +53,22 @@ class LocalConfig:
     """Run containers as the invoking user, so files they write are owned by them."""
     no_pull: bool = True
     """Use locally built images rather than pulling."""
+    bundle: str | None = None
+    """Host path of the unpacked cascade bundle (``bundle/build.sh`` writes
+    ``dist/bundle/opt-cascade``), mounted read-only into every wrapped docker container.
+    Relative to the pipeline's directory. Required when a wrapped docker ref is placed
+    here."""
 
     @classmethod
     def decode(cls, raw: Mapping[str, Any]) -> Self:
-        _reject_unknown("local config", raw, {"aws_credentials_dir", "map_current_user", "no_pull"})
+        _reject_unknown(
+            "local config", raw, {"aws_credentials_dir", "map_current_user", "no_pull", "bundle"}
+        )
         return cls(
             aws_credentials_dir=raw.get("aws_credentials_dir"),
             map_current_user=raw.get("map_current_user", True),
             no_pull=raw.get("no_pull", True),
+            bundle=raw.get("bundle"),
         )
 
     def encode(self) -> dict[str, Any]:
@@ -68,6 +76,7 @@ class LocalConfig:
             "aws_credentials_dir": self.aws_credentials_dir,
             "map_current_user": self.map_current_user,
             "no_pull": self.no_pull,
+            "bundle": self.bundle,
         }
 
 

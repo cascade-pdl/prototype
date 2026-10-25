@@ -21,6 +21,8 @@ the substrate layer below the configuration layer.
 """
 from __future__ import annotations
 
+import os
+
 from typing import Callable, Mapping
 
 from cascade.model.runner_kinds import RunnerKind
@@ -37,6 +39,10 @@ from cascade.runners.process import RunnerSubprocess
 
 class RunnerKindError(Exception):
     """No builder is registered for this pairing of backend and ref kind."""
+
+
+class BundleError(Exception):
+    """A wrapped ref's backend points at no usable cascade bundle."""
 
 
 def _build_local_docker(
@@ -57,7 +63,31 @@ def _build_local_docker(
         memory=resources.memory if resources else None,
         cpu=resources.cpu if resources else None,
         gpu=resources.gpu if resources else 0,
+        command=None if ref.command is None else list(ref.command),
+        bundle=_bundle_path(backend, cwd) if ref.wrap else None,
     )
+
+
+def _bundle_path(backend: Backend, cwd: str | None) -> str:
+    """The backend's bundle as an absolute host path, checked to be a bundle.
+
+    Placement has already refused a wrapped ref on a backend with no ``bundle``; this
+    checks what placement cannot, the path itself, which is relative to the pipeline's
+    directory."""
+    local = backend.config
+    assert isinstance(local, LocalConfig)
+    if local.bundle is None:
+        raise BundleError(
+            f"backend {backend.name!r} has no `bundle` to wrap docker refs with; set one, "
+            "or `wrap: false` on refs whose image has cascade inside"
+        )
+    path = os.path.abspath(os.path.join(cwd or os.getcwd(), local.bundle))
+    if not os.path.isfile(os.path.join(path, "bin", "cascade")):
+        raise BundleError(
+            f"backend {backend.name!r}: no cascade bundle at {path} (from `bundle: "
+            f"{local.bundle}`); build one with bundle/build.sh"
+        )
+    return path
 
 
 def _build_local_subprocess(
@@ -69,7 +99,7 @@ def _build_local_subprocess(
     # resources are matched and counted, not enforced: a plain process has no cap
     ref = config.config
     assert isinstance(ref, RefSubprocess)
-    return RunnerSubprocess(cmd=list(ref.cmd), cwd=cwd)
+    return RunnerSubprocess(cmd=list(ref.cmd), cwd=cwd, wrap=ref.wrap)
 
 
 def _build_ecs_docker(

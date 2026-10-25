@@ -36,7 +36,10 @@ types:
 refs: []
 #  - name: detect
 #    runner: docker          # docker | subprocess | echo
-#    config: { image: "my-registry/detect:v1" }
+#    config:
+#      image: "my-registry/detect:v1"   # any image: it needs no cascade inside
+#      command: ["detect", "--in", "/cascade/inputs/image", "--out", "/cascade/outputs/dets"]
+#      # wrap: false         # only for an image with the cascade SDK inside
 #    resources: { cpu: 1, memory: 2GiB }   # required on docker/subprocess; vCPU, unit on memory
 #    requires: []            # capabilities a backend must provide, e.g. [www]
 #    input:  [ { name: image, type: "io.Image" } ]
@@ -90,6 +93,7 @@ backends:
     config:
       no_pull: true         # use locally built images
       map_current_user: true
+#     bundle: path/to/dist/bundle/opt-cascade   # bundle/build.sh; needed by wrapped docker refs
 #     aws_credentials_dir: ~/.aws
 #
 # An ECS backend (needs an s3 store):

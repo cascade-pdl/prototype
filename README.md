@@ -50,7 +50,22 @@ code is passed through; stop signals are forwarded to it.
     bundle/build.sh
     CASCADE_BUNDLE=dist/bundle/opt-cascade poetry run pytest -q tests/cli/test_bundle.py
 
-Runners do not use the bundle yet.
+A docker ref is wrapped by default: the local backend mounts the bundle (its `bundle:`
+setting) and runs the image's own entrypoint and command under it. A ref's `command:`
+replaces the image's default command. `wrap: false` is for images that speak the
+protocol themselves (the cascade SDK installed in them). `subprocess` refs are wrapped
+the same way on the host, staging under `$CASCADE_ROOT`.
+
+## Examples
+
+Each directory under `examples/` is a project you can `cascade run` from inside it, and
+is run by the test suite (`tests/test_mock_pipeline.py` for `mock`, the others by
+`tests/test_examples.py`; those needing Docker or a built bundle are skipped without
+them).
+
+- `mock`: host scripts written against the node SDK (`subprocess`, `wrap: false`).
+- `docker-raw`: a stock `python:3.13-slim` image with no cascade inside, wrapped by the
+  bundle (`bundle/build.sh` first).
 
 ## Not yet built (deliberate)
 

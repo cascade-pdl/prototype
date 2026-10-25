@@ -7,8 +7,17 @@ import asyncio
 
 import pytest
 
+import os
+
 from cascade.protocol.run_spec import RunSpec
-from cascade.runners.docker import HandleDocker, RunnerDocker, container_name
+from cascade.runners.docker import (
+    DockerImageError,
+    HandleDocker,
+    ImageConfig,
+    RunnerDocker,
+    container_name,
+    inspect_image,
+)
 from tests.support.processes import alive, pid_from, posix_only, sleeper
 
 
@@ -62,3 +71,104 @@ async def test_kill_after_the_container_exited_does_not_call_docker(monkeypatch)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", no_exec)
     assert (await handle.kill()).exit_code == 0
+
+
+# --- wrapped: the bundle as entrypoint, the image's own command after `--` ----
+
+SPEC = RunSpec(name="n", run_id="r")
+IMAGE = ImageConfig(id="sha256:abc", entrypoint=("/usr/bin/tool",), cmd=("--default",))
+
+
+def wrapped() -> list[str]:
+    return RunnerDocker(image="tool:1", bundle="/b/opt-cascade")._build_cmd(
+        SPEC, name="c", image=IMAGE)
+
+
+def test_a_wrapped_run_makes_the_bundle_the_entrypoint():
+    cmd = wrapped()
+    assert cmd[cmd.index("--entrypoint") + 1] == "/opt/cascade/bin/cascade"
+    assert "/b/opt-cascade:/opt/cascade:ro" in cmd       # mounted read-only
+    assert "/cascade:mode=1777" in cmd                     # staging writable by any user
+
+
+def test_the_image_runs_by_id_then_its_own_entrypoint_and_command_follow_wrap():
+    """By id: every container of the run is exactly the image that was inspected."""
+    cmd = wrapped()
+    after = cmd[cmd.index("sha256:abc") + 1:]
+    assert after == ["node", "wrap", "--", "/usr/bin/tool", "--default"]
+    assert "tool:1" not in cmd
+
+
+def test_command_replaces_the_default_command_and_keeps_the_entrypoint():
+    cmd = RunnerDocker(image="tool:1", bundle="/b", command=["-x", "in"])._build_cmd(
+        SPEC, name="c", image=IMAGE)
+    assert cmd[-5:] == ["wrap", "--", "/usr/bin/tool", "-x", "in"]
+
+
+def test_an_image_with_nothing_to_run_is_an_error():
+    bare = ImageConfig(id="sha256:abc", entrypoint=(), cmd=())
+    with pytest.raises(DockerImageError, match="nothing to run"):
+        RunnerDocker(image="scratch:1", bundle="/b")._build_cmd(SPEC, name="c", image=bare)
+
+
+def test_extra_args_still_come_before_the_image():
+    cmd = RunnerDocker(image="t:1", bundle="/b", extra_args=["--shm-size", "1g"])._build_cmd(
+        SPEC, name="c", image=IMAGE)
+    assert cmd.index("--shm-size") < cmd.index("sha256:abc")
+
+
+def test_unwrapped_runs_the_image_as_published_with_any_command_after_it():
+    cmd = RunnerDocker(image="mine:1", command=["serve", "--once"])._build_cmd(SPEC, name="c")
+    assert cmd[-3:] == ["mine:1", "serve", "--once"]
+    assert "--entrypoint" not in cmd
+
+
+# --- inspecting the image, against a stand-in `docker` ------------------------
+
+FAKE_DOCKER = """#!/bin/sh
+case "$1 $2" in
+  "image inspect")
+    if [ -f "$FAKE_DOCKER_STATE/present" ]; then
+      echo '[{"Id": "sha256:abc", "Config": {"Entrypoint": ["/e"], "Cmd": null}}]'
+    else
+      echo "Error: No such image: $3" >&2; exit 1
+    fi ;;
+  "pull --quiet") echo "$3" >> "$FAKE_DOCKER_STATE/pulled"; touch "$FAKE_DOCKER_STATE/present" ;;
+  *) exit 2 ;;
+esac
+"""
+
+
+@pytest.fixture
+def fake_docker(tmp_path, monkeypatch):
+    bin_dir, state = tmp_path / "bin", tmp_path / "state"
+    bin_dir.mkdir()
+    state.mkdir()
+    (bin_dir / "docker").write_text(FAKE_DOCKER)
+    (bin_dir / "docker").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_DOCKER_STATE", str(state))
+    return state
+
+
+@pytest.mark.skipif(posix_only, reason="a shell script stands in for docker")
+@pytest.mark.asyncio
+async def test_inspect_reads_id_entrypoint_and_command(fake_docker):
+    (fake_docker / "present").touch()
+    assert await inspect_image("t:1", pull=False) == ImageConfig("sha256:abc", ("/e",), ())
+
+
+@pytest.mark.skipif(posix_only, reason="a shell script stands in for docker")
+@pytest.mark.asyncio
+async def test_a_missing_image_is_not_pulled_when_the_backend_says_no_pull(fake_docker):
+    with pytest.raises(DockerImageError, match="`no_pull`"):
+        await inspect_image("t:1", pull=False)
+    assert not (fake_docker / "pulled").exists()
+
+
+@pytest.mark.skipif(posix_only, reason="a shell script stands in for docker")
+@pytest.mark.asyncio
+async def test_a_missing_image_is_pulled_when_allowed(fake_docker):
+    config = await inspect_image("t:1", pull=True)
+    assert (fake_docker / "pulled").read_text().split() == ["t:1"]
+    assert config.id == "sha256:abc"

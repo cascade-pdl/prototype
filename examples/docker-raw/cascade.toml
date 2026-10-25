@@ -1,0 +1,5 @@
+[project]
+name = "docker-raw"
+pipeline = "pipeline.yaml"
+deployment = "deployment.yaml"
+description = "Stock images, no cascade inside: the bundle wraps each command."

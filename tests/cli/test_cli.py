@@ -18,6 +18,7 @@ from cascade.cli.main import main
 from cascade.deployment import Deployment
 from cascade.model.pipeline import Pipeline
 from cascade.plan.compile import compile_pipeline
+from cascade.plan.plan import PLAN_VERSION
 from cascade.project import Project, find_project
 
 
@@ -79,7 +80,7 @@ def test_compile_writes_a_plan(project, tmp_path):
     out = tmp_path / "out.plan.json"
     assert main(["compile", str(project / "pipeline.yaml"), "-o", str(out)]) == 0
     raw = json.loads(out.read_text())
-    assert raw["version"] == 8
+    assert raw["version"] == PLAN_VERSION
     assert raw["dag_outputs"], "compiled plan lost dag_outputs"
 
 

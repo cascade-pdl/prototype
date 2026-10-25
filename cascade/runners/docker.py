@@ -1,9 +1,11 @@
 import asyncio
+import json
 import os
 import re
 import secrets
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
+from cascade.protocol.bundle import BUNDLE_ENTRYPOINT, BUNDLE_ROOT, STAGING_ROOT, wrap_args
 from cascade.protocol.runner import Runner
 from cascade.protocol.run_status import RunStatus
 from cascade.runners.process import HandleSubprocess
@@ -56,7 +58,69 @@ class HandleDocker(HandleSubprocess):
         return await super().kill()
 
 
+class DockerImageError(Exception):
+    """The image to run is missing, or gives nothing to run."""
+
+
+@dataclass(frozen=True)
+class ImageConfig:
+    """What a wrapped run needs from an image's own config.
+
+    Read from the image because overriding the entrypoint (to put cascade first) discards
+    the image's own; it is passed on after ``--`` instead. ``id`` is what is run, so the
+    container is exactly the image that was inspected, even if its tag moves meanwhile.
+    """
+
+    id: str
+    entrypoint: tuple[str, ...]
+    cmd: tuple[str, ...]
+
+
+async def inspect_image(image: str, pull: bool) -> ImageConfig:
+    """The image's id, entrypoint and default command, pulling it first if allowed."""
+    raw = await _docker_json("image", "inspect", image)
+    if raw is None and pull:
+        await _docker("pull", "--quiet", image)
+        raw = await _docker_json("image", "inspect", image)
+    if raw is None:
+        raise DockerImageError(
+            f"image {image!r} is not present locally"
+            + ("" if pull else ", and the backend's `no_pull` stops it being pulled")
+        )
+    config = raw[0].get("Config") or {}
+    return ImageConfig(
+        id=raw[0]["Id"],
+        entrypoint=tuple(config.get("Entrypoint") or ()),
+        cmd=tuple(config.get("Cmd") or ()),
+    )
+
+
+async def _docker(*argv: str) -> tuple[int, bytes, bytes]:
+    proc = await asyncio.create_subprocess_exec(
+        "docker", *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    out, err = await proc.communicate()
+    return proc.returncode, out, err
+
+
+async def _docker_json(*argv: str):
+    code, out, _ = await _docker(*argv)
+    return json.loads(out) if code == 0 else None
+
+
 class RunnerDocker(Runner):
+    """``docker run`` of one ref instance.
+
+    **Wrapped** (``bundle`` given): the image needs no cascade inside. The bundle is
+    mounted read-only at ``/opt/cascade`` and made the entrypoint; it runs ``cascade node
+    wrap -- <the image's entrypoint> <command, or the image's default command>``, which
+    stages inputs under ``/cascade/inputs``, runs the tool, and collects
+    ``/cascade/outputs``. ``/cascade`` is a tmpfs anyone can write, because the container
+    usually runs as the host user (``map_current_user``) and the image owes it nothing.
+
+    **Unwrapped** (no ``bundle``): the image speaks the protocol itself and runs as
+    published, with ``command`` (if any) replacing its default command.
+    """
 
     def __init__(
         self,
@@ -68,6 +132,8 @@ class RunnerDocker(Runner):
         memory: int | None = None,
         cpu: float | None = None,
         gpu: int = 0,
+        command: list[str] | None = None,
+        bundle: str | None = None,
     ):
         """``memory`` in MiB, ``cpu`` in vCPU, ``gpu`` a count: the ref's resources,
         which on docker are the allocation as well as the minimum."""
@@ -79,8 +145,16 @@ class RunnerDocker(Runner):
         self.memory = memory
         self.cpu = cpu
         self.gpu = gpu
+        self.command = command
+        self.bundle = bundle
 
-    def _build_cmd(self, spec: RunSpec, name: str | None = None) -> list[str]:
+    def _build_cmd(
+        self, spec: RunSpec, name: str | None = None, image: ImageConfig | None = None
+    ) -> list[str]:
+        """The ``docker run`` command line. ``image`` is the inspected image, needed when
+        wrapping (and only then)."""
+        if self.bundle is not None and image is None:
+            raise ValueError("a wrapped run needs the inspected image")
         cmd = ["docker", "run", "--rm"]
         if name is not None:
             cmd += ["--name", name]
@@ -122,15 +196,37 @@ class RunnerDocker(Runner):
 
         for k, v in env.items():
             cmd += ["-e", f"{k}={v}"]
+
+        if self.bundle is None:
+            cmd += self.extra_args
+            cmd.append(self.image)
+            return cmd + list(self.command or ())
+
+        tool = [*image.entrypoint, *(self.command or image.cmd)]
+        if not tool:
+            raise DockerImageError(
+                f"image {self.image!r} has no entrypoint and no default command, and the "
+                "ref gives no `command`: there is nothing to run"
+            )
+        cmd += [
+            "--tmpfs", f"{STAGING_ROOT}:mode=1777",
+            "-v", f"{self.bundle}:{BUNDLE_ROOT}:ro",
+            "--entrypoint", BUNDLE_ENTRYPOINT,
+        ]
         cmd += self.extra_args
-        cmd.append(self.image)
-        return cmd
+        cmd.append(image.id)
+        return cmd + wrap_args(tool)
 
     async def spawn(self, spec: RunSpec) -> HandleDocker:
         name = container_name(spec)
+        image = (
+            await inspect_image(self.image, pull=not self.no_pull)
+            if self.bundle is not None
+            else None
+        )
         return HandleDocker(
             process=await asyncio.create_subprocess_exec(
-                *self._build_cmd(spec=spec, name=name),
+                *self._build_cmd(spec=spec, name=name, image=image),
             ),
             name=name,
         )

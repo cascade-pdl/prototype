@@ -27,7 +27,7 @@ refs:
   - name: d
     runner: docker
     resources: { cpu: 1, memory: 1GiB }
-    config: { image: "x:1" }
+    config: { image: "x:1", wrap: false }
     input:  [ { name: i, type: string } ]
     output: [ { name: o2, type: string } ]
 dags:

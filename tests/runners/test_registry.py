@@ -13,7 +13,7 @@ from cascade.protocol.run_spec import RunSpec
 from cascade.plan.signature import Port, Signature, TypeExpr
 from cascade.store.file_store import FileStore, FileConfig
 
-from cascade.runners.registry import RunnerKindError, build_runner, RUNNER_BUILDERS
+from cascade.runners.registry import BundleError, RunnerKindError, build_runner, RUNNER_BUILDERS
 from cascade.substrate.backends import Backend, BackendKind, EcsConfig, LocalConfig, RUNS
 from cascade.runners.docker import RunnerDocker
 from cascade.runners.echo import RunnerEcho
@@ -36,7 +36,7 @@ def test_every_placeable_pairing_has_a_builder():
 
 def test_builds_a_docker_runner():
     config = RunConfig(
-        config=RefDocker(image="flat-bug:v3", extra_args=["--gpus", "all"]),
+        config=RefDocker(image="flat-bug:v3", extra_args=["--gpus", "all"], wrap=False),
     )
     runner = build_runner(config)
     assert isinstance(runner, RunnerDocker)
@@ -61,13 +61,13 @@ def test_builds_an_echo_runner():
 # --- backend settings ----------------------------------------------------------
 
 def test_docker_no_pull_defaults_to_true():
-    runner = build_runner(RunConfig(config=RefDocker(image="x:1")))
+    runner = build_runner(RunConfig(config=RefDocker(image="x:1", wrap=False)))
     assert runner.no_pull is True
 
 
 def test_the_backend_supplies_the_machine_settings():
     runner = build_runner(
-        RunConfig(config=RefDocker(image="x:1")),
+        RunConfig(config=RefDocker(image="x:1", wrap=False)),
         _local(no_pull=False, map_current_user=False, aws_credentials_dir="~/.aws"),
     )
     assert (runner.no_pull, runner.map_current_user, runner.aws_credentials_dir) == (
@@ -79,7 +79,7 @@ def test_ecs_is_placeable_but_not_built_yet():
     ecs = Backend(name="ecs-cpu", kind=BackendKind.ecs, max=Resources(16, 122880),
                   config=EcsConfig(cluster="c", subnets=("s",)), concurrency=4)
     with pytest.raises(RunnerKindError, match="not built yet"):
-        build_runner(RunConfig(config=RefDocker(image="x:1")), ecs)
+        build_runner(RunConfig(config=RefDocker(image="x:1", wrap=False)), ecs)
 
 
 def test_ecs_cannot_run_a_subprocess():
@@ -93,7 +93,7 @@ def test_ecs_cannot_run_a_subprocess():
 
 def test_resource_limits_reach_the_docker_command():
     config = RunConfig(
-        config=RefDocker(image="x:1"),
+        config=RefDocker(image="x:1", wrap=False),
         resources=Resources(cpu=2, memory=2048, gpu=1),
     )
     cmd = build_runner(config)._build_cmd(RunSpec(name="n", run_id="r"))
@@ -124,7 +124,7 @@ def test_echo_without_a_signature_writes_nothing():
 def test_other_kinds_ignore_the_signature():
     sig = Signature(inputs={}, outputs={"o": Port(TypeExpr.parse("string"))})
     runner = build_runner(
-        RunConfig(config=RefDocker(image="x:1")),
+        RunConfig(config=RefDocker(image="x:1", wrap=False)),
         signature=sig,
     )
     assert isinstance(runner, RunnerDocker)
@@ -163,7 +163,7 @@ def _docker_for(spec_stores=True, tmp_path=None):
     from cascade.protocol.run_spec import RunSpec
     from cascade.store.file_store import FileConfig, FileStore
 
-    runner = build_runner(RunConfig(config=RefDocker(image="x:1")))
+    runner = build_runner(RunConfig(config=RefDocker(image="x:1", wrap=False)))
     if not spec_stores:
         return runner, RunSpec(name="n", run_id="r")
     base = FileConfig(root=str(tmp_path / "_store"), scope=("r1", "main"))
@@ -237,9 +237,50 @@ def test_home_is_set_when_credentials_are_mounted(tmp_path):
     from cascade.protocol.run_spec import RunSpec
 
     runner = build_runner(
-        RunConfig(config=RefDocker(image="x:1")),
+        RunConfig(config=RefDocker(image="x:1", wrap=False)),
         _local(aws_credentials_dir=str(tmp_path / ".aws")),
     )
     cmd = runner._build_cmd(RunSpec(name="n", run_id="r"))
     home = [c.split("=", 1)[1] for c in cmd if c.startswith("HOME=")][0]
     assert any(c.endswith(f"{home}/.aws:ro") for c in cmd)
+
+# --- wrapping: the bundle path and the opt-out --------------------------------
+
+def _bundle(at):
+    (at / "bin").mkdir(parents=True)
+    (at / "bin" / "cascade").write_text("#!/opt/cascade/bin/python3 -I\n")
+    return at
+
+
+def test_a_wrapped_docker_ref_gets_the_bundle_relative_to_the_pipeline(tmp_path):
+    _bundle(tmp_path / "dist" / "opt-cascade")
+    runner = build_runner(
+        RunConfig(config=RefDocker(image="x:1")), _local(bundle="dist/opt-cascade"),
+        cwd=str(tmp_path),
+    )
+    assert runner.bundle == str(tmp_path / "dist" / "opt-cascade")
+
+
+def test_a_bundle_path_that_is_not_a_bundle_is_named(tmp_path):
+    with pytest.raises(BundleError, match="no cascade bundle at .*/nowhere"):
+        build_runner(RunConfig(config=RefDocker(image="x:1")), _local(bundle="nowhere"),
+                     cwd=str(tmp_path))
+
+
+def test_a_wrapped_docker_ref_on_a_backend_without_a_bundle_is_refused():
+    with pytest.raises(BundleError, match="has no `bundle`"):
+        build_runner(RunConfig(config=RefDocker(image="x:1")), _local())
+
+
+def test_an_unwrapped_docker_ref_needs_no_bundle():
+    assert build_runner(RunConfig(config=RefDocker(image="x:1", wrap=False))).bundle is None
+
+
+def test_the_command_reaches_the_docker_runner():
+    runner = build_runner(RunConfig(config=RefDocker(image="x:1", command=["a"], wrap=False)))
+    assert runner.command == ["a"]
+
+
+def test_a_subprocess_ref_says_whether_it_is_wrapped():
+    assert build_runner(RunConfig(config=RefSubprocess(cmd=["t"]))).wrap is True
+    assert build_runner(RunConfig(config=RefSubprocess(cmd=["t"], wrap=False))).wrap is False
