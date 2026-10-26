@@ -1,4 +1,4 @@
-"""Concurrency limits end to end: real processes, a fan, a deployment's caps.
+"""Concurrency limits end to end: real processes, a fan, a backend's and a pipeline's caps.
 
 Each lane records when its process started and ended; the peak overlap of those
 intervals is how many really ran at once.
@@ -33,6 +33,7 @@ with cn.from_env(os.environ) as n:
 
 PIPELINE = """
 entrypoint: main
+limits: %LIMITS%
 input: [ { name: numbers, type: "int[]" } ]
 refs:
   - name: work
@@ -83,14 +84,13 @@ async def test_a_fan_runs_no_wider_than_its_limits(tmp_path, limit, limits, expe
     log.mkdir()
     script = tmp_path / "lane.py"
     script.write_text(LANE)
-    text = (PIPELINE.replace("%LIMIT%", limit).replace("%PYTHON%", repr(sys.executable))
+    text = (PIPELINE.replace("%LIMITS%", repr(limits)).replace("%LIMIT%", limit).replace("%PYTHON%", repr(sys.executable))
             .replace("%SCRIPT%", repr(str(script))).replace("%LOG%", repr(str(log))))
     plan = compile_pipeline(Pipeline.decode(safe_load(text)))
     deployment = Deployment.decode({
         "store": {"kind": "file", "config": {"root": str(tmp_path / "store")}},
         "backends": [{"name": "local", "kind": "local", "max": {"cpu": 4, "memory": "8GiB"},
                       "concurrency": 2}],
-        "limits": limits,
     })
 
     result = await Executor(plan, deployment=deployment, cwd=str(tmp_path)).run(

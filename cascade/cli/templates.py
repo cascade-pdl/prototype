@@ -43,7 +43,7 @@ refs: []
 #      # wrap: false         # only for an image with the cascade SDK inside
 #    resources: { cpu: 1, memory: 2GiB }   # required on docker/subprocess; vCPU, unit on memory
 #    requires: []            # capabilities a backend must provide, e.g. [www]
-#    limit: heavy            # a class of work; the deployment's `limits:` says how many at once
+#    limit: heavy            # a class of work; `limits:` below says how many at once
 #    input:  [ { name: image, type: "io.Image" } ]
 #    output: [ { name: dets,  type: "Detection[]" } ]
 
@@ -57,6 +57,11 @@ dags: []
 #        runs: detect
 #        depends_on: [ { node: "$input", field: image, as: image } ]
 #    output: [ { node: d, field: dets, as: dets } ]
+
+# How many refs of a class run at once, wherever they run (a ref names its class with
+# `limit:`). A ref naming a class not declared here is a compile error.
+# limits:
+#   heavy: 2
 """
 
 DEPLOYMENT_SKELETON = """\
@@ -109,8 +114,4 @@ backends:
 #      subnets: [subnet-0123]
 #      launch_type: FARGATE_SPOT
 
-# How many refs of a class run at once, wherever they run (a ref names its class with
-# `limit:`). A ref naming a class not listed here is refused before the run.
-# limits:
-#   heavy: 2
 """

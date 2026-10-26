@@ -114,13 +114,7 @@ def test_store_block_is_interchangeable_with_env_path(tmp_path):
     assert live.scope == ("wilder", "moth")
 
 
-def test_named_limits_round_trip():
-    dep = Deployment.decode(_raw(limits={"heavy": 3, "portal_api": 5}))
-    assert dep.limits == {"heavy": 3, "portal_api": 5}
-    assert Deployment.decode(dep.encode()).limits == dep.limits
-
-
-@pytest.mark.parametrize("limits", [{"heavy": 0}, {"heavy": "3"}, {"heavy": True}, ["heavy"]])
-def test_a_limit_is_a_positive_number_of_tasks(limits):
-    with pytest.raises(DeploymentError):
-        Deployment.decode(_raw(limits=limits))
+def test_named_limits_are_refused_pointing_at_the_pipeline():
+    """Ignored, they would let the work run uncapped."""
+    with pytest.raises(DeploymentError, match="moved to the pipeline"):
+        Deployment.decode(_raw(limits={"heavy": 3}))

@@ -6,10 +6,9 @@ the project, the deployment binds it to concrete infrastructure: the store backe
 can run, each with the largest task it accepts and what it provides. Refs
 state what they need; placement matches them to the first backend that fits.
 
-``limits:`` caps classes of work wherever they run: ``{heavy: 3, portal_api: 5}``. A ref
-names its class (``limit: heavy``), the deployment says how many run at once. The label
-describes the work, so it is the ref's; the number depends on what the work runs against,
-so it is the deployment's. A backend's own cap is its ``concurrency``.
+A backend's own cap is its ``concurrency``: a fact about that machine or cluster. Named
+limits (how many ``bulky`` refs at once) are not here: they are about the work, so the
+pipeline declares them.
 
 The **store lives here, base scope included** — it is a substrate concern, not an
 identity one, so the same project can target different buckets/prefixes per
@@ -46,13 +45,11 @@ class Deployment:
 
     ``store`` is required (a deployment with nowhere to put data is meaningless).
     ``backends`` is ordered: placement takes the first that fits, so order is priority.
-    ``limits`` maps a ref's ``limit:`` label to how many such refs run at once.
     """
 
     store: StoreConfig
     name: str | None = None
     backends: list[Backend] = field(default_factory=list)
-    limits: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         names = [b.name for b in self.backends]
@@ -81,7 +78,6 @@ class Deployment:
             "name": self.name,
             "store": encode_config(self.store),
             "backends": [b.encode() for b in self.backends],
-            "limits": dict(self.limits),
         }
 
     @classmethod
@@ -92,7 +88,13 @@ class Deployment:
                 "`runners:` was replaced by `backends:`: local docker settings "
                 "go in a `kind: local` backend's config, sizes in each ref's `resources:`"
             )
-        unknown = set(raw) - {"name", "store", "backends", "limits"}
+        if "limits" in raw:
+            # ignored, the work would run uncapped
+            raise DeploymentError(
+                "`limits:` moved to the pipeline: declare it at the top of pipeline.yaml, "
+                "beside `refs:`; a deployment caps backends only, with `concurrency`"
+            )
+        unknown = set(raw) - {"name", "store", "backends"}
         if unknown:
             raise DeploymentError(f"unknown deployment field(s): {sorted(unknown)}")
         try:
@@ -103,7 +105,6 @@ class Deployment:
             store=decode_config(raw["store"]),
             name=raw.get("name"),
             backends=backends,
-            limits=_decode_limits(raw.get("limits") or {}),
         )
 
     @classmethod
@@ -121,14 +122,3 @@ class Deployment:
         with open(path, "w") as f:
             f.write(self.dump())
 
-
-def _decode_limits(raw: Any) -> dict[str, int]:
-    if not isinstance(raw, dict):
-        raise DeploymentError(f"`limits` maps a label to a number of tasks, got {raw!r}")
-    bad = {
-        label: n for label, n in raw.items()
-        if isinstance(n, bool) or not isinstance(n, int) or n < 1
-    }
-    if bad:
-        raise DeploymentError(f"limits must be positive integers: {bad}")
-    return {str(label): n for label, n in raw.items()}

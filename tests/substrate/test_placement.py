@@ -189,17 +189,3 @@ def test_an_ecs_backend_is_not_asked_for_a_local_bundle(wrapped_plan):
     """On ECS the bundle is appended to the image, not mounted from this host."""
     placed = place(wrapped_plan, _deployment("s3", [ecs("ecs-cpu")]))
     assert placed.backend_of("raw") == "ecs-cpu"
-
-
-# --- named limits ----------------------------------------------------------------
-
-def test_a_limit_the_deployment_does_not_define_is_refused_before_the_run():
-    """Not "unlimited": a cap that silently stops applying floods what it protected."""
-    plan = compile_pipeline(Pipeline.decode(safe_load(PIPELINE.replace(
-        "resources: { cpu: 1, memory: 2GiB }", "resources: { cpu: 1, memory: 2GiB }, limit: api"
-    ))))
-    with pytest.raises(PlacementError, match="limit 'api'.*does not define") as e:
-        place(plan, _deployment())
-    assert "['tidy']" in str(e.value)
-    defined = Deployment.decode({**_deployment().encode(), "limits": {"api": 2}})
-    assert place(plan, defined).backend_of("tidy") == "local"

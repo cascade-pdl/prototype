@@ -70,6 +70,9 @@ them).
   this checkout and an `entrypoint.py`; not wrapped.
 - `docker-built-wrapped`: an image cascade builds from `refs/jq/` (Alpine + `jq`, no
   cascade), wrapped by the bundle.
+- `limits`: host scripts (SDK, `wrap: false`): fanned arithmetic from one ref with the
+  operation in `args`, then a 3 s `bulky-task` held to two at a time by a named limit
+  (`limit: bulky` on the ref, `limits: {bulky: 2}` at the top of the pipeline).
 
 ## Images cascade builds
 

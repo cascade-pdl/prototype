@@ -1,0 +1,5 @@
+[project]
+name = "limits"
+pipeline = "pipeline.yaml"
+deployment = "deployment.yaml"
+description = "Mock arithmetic over a fan, then a slow step held to two at a time by a named limit."

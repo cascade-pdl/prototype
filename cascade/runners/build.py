@@ -68,12 +68,15 @@ def build_ref(
     """Build one ref's runner on the backend it was placed on, holding its slots in
     ``limiter`` while it runs.
 
-    With no ``placements`` every ref runs on the uncapped local host: the no-deployment
-    case (tests, ``cascade run --backend``), where there is no policy and so no limit. A
-    run with a deployment always passes them.
+    With no ``placements`` every ref runs on the uncapped local host (tests, ``cascade
+    run --backend``): no backend pool, but a ref's named limit still holds, since it is
+    part of what the pipeline means. A run with a deployment always passes them.
     """
-    if placements is None or config.runner is RunnerKind.echo:
+    if config.runner is RunnerKind.echo:
         return build_runner(config, signature=signature, cwd=cwd)
+    if placements is None:
+        runner = build_runner(config, signature=signature, cwd=cwd)
+        return _limited(runner, _named_pools(config, limiter), limiter)
     placed = placements.backend_of(name)
     if placed is None:
         raise PlacementError([f"ref {name!r} was not placed"])
@@ -82,26 +85,28 @@ def build_ref(
         raise PlacementError([f"ref {name!r} is placed on unknown backend {placed!r}"])
     image = (images or {}).get(name)
     runner = build_runner(config, backend, signature=signature, cwd=cwd, image=image)
-    pools = _pools(backend, config, limiter)
+    backend_pools = (backend_pool(backend.name),) if backend.concurrency is not None else ()
+    return _limited(runner, backend_pools + _named_pools(config, limiter), limiter)
+
+
+def _limited(runner: Runner, pools: tuple[Pool, ...], limiter: Limiter | None) -> Runner:
     return LimitedRunner(runner, limiter, pools) if limiter and pools else runner
 
 
-def _pools(backend: Backend, config: RunConfig, limiter: Limiter | None) -> tuple[Pool, ...]:
-    """Every pool a ref on ``backend`` counts against. A label the limiter does not know
-    is an error, never "unlimited" (placement reports it before the run)."""
-    pools = []
-    if backend.concurrency is not None:
-        pools.append(backend_pool(backend.name))
-    if config.limit is not None:
-        pool = named_pool(config.limit)
-        if limiter is None or limiter.capacity(pool) is None:
-            raise PlacementError([f"limit {config.limit!r} has no capacity in the deployment"])
-        pools.append(pool)
-    return tuple(pools)
+def _named_pools(config: RunConfig, limiter: Limiter | None) -> tuple[Pool, ...]:
+    """The ref's named pool, if it names one. A label the limiter does not know is an
+    error, never "unlimited" (compile reports it first)."""
+    if config.limit is None:
+        return ()
+    pool = named_pool(config.limit)
+    if limiter is None or limiter.capacity(pool) is None:
+        raise PlacementError([f"limit {config.limit!r} has no capacity in the plan"])
+    return (pool,)
 
 
 def run_limiter(backends: Sequence[Backend], limits: Mapping[str, int]) -> Limiter:
-    """The pools for one run: each capped backend, and each named limit."""
+    """The pools for one run, each from exactly one source: each capped backend from the
+    deployment, each named limit from the plan. The two kinds share no namespace."""
     capacities = {backend_pool(b.name): b.concurrency for b in backends if b.concurrency}
     capacities.update({named_pool(label): n for label, n in limits.items()})
     return Limiter(capacities)
@@ -117,7 +122,7 @@ def configure_ref_builder(
     """Bind the run-wide half, leaving a function of ref data alone.
 
     One ``Limiter`` per builder, so one per run: backends' ``concurrency`` and the
-    deployment's named ``limits`` count across the whole run. Build a new builder per run.
+    plan's named ``limits`` count across the whole run. Build a new builder per run.
 
     Takes the values it reads rather than a ``Deployment``: the store binding is no
     business of a runner, and ``cwd`` is not in a deployment file at all. An earlier

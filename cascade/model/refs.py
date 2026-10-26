@@ -23,7 +23,7 @@ class Ref:
     class is the kind from then on, so the two cannot disagree. ``requires`` names
     capabilities a backend must ``provide`` (``www``, ``private``); it never names a
     backend. ``limit`` names the class of work this ref belongs to (``heavy``,
-    ``portal_api``); the deployment's ``limits:`` says how many of that class run at once.
+    ``portal_api``); the pipeline's ``limits:`` says how many of that class run at once.
 
     YAML::
 

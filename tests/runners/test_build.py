@@ -188,6 +188,13 @@ def test_a_labelled_ref_takes_its_named_pool_with_its_backends(plan):
     assert runner.pools == (backend_pool("here"), named_pool("heavy"))
 
 
+def test_a_named_limit_holds_without_a_deployment(plan):
+    """It is part of what the pipeline means, so tests and `--backend` runs honour it."""
+    runner = configure_ref_builder(limits={"heavy": 1})(*_labelled(plan, "heavy"))
+    assert isinstance(runner, LimitedRunner) and isinstance(runner.inner, RunnerDocker)
+    assert runner.pools == (named_pool("heavy"),)
+
+
 def test_one_run_shares_one_limiter_across_every_runner_it_builds(plan):
     """One runner is built per dispatch; a limiter per runner would limit nothing."""
     build = configure_ref_builder(

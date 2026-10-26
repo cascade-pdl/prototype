@@ -5,6 +5,7 @@ from a copy of its directory, with only machine paths adjusted. Examples that ne
 or a built bundle (``bundle/build.sh``) are skipped when those are absent.
 """
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -94,3 +95,14 @@ def test_docker_sdk_builds_an_image_with_cascade_inside_and_runs_it_unwrapped(
 def test_docker_built_wrapped_builds_a_tool_image_and_wraps_it(tmp_path, monkeypatch, capsys):
     dest = project("docker-built-wrapped", tmp_path, monkeypatch)
     assert run(dest, capsys, "t1") == {"result": [1, 2, 3, 4, 5]}
+
+
+def test_limits_holds_the_bulky_step_to_two_at_a_time(tmp_path, monkeypatch, capsys):
+    """Four 3 s `bulky-task` lanes under `limits: {bulky: 2}` take two rounds, ~6 s; the
+    backend's `concurrency: 4` alone would let them finish in one, ~3 s."""
+    dest = project("limits", tmp_path, monkeypatch)
+    started = time.monotonic()
+    values = run(dest, capsys, "t1")
+    elapsed = time.monotonic() - started
+    assert values == {"squares": [225.0, 272.25, 324.0, 380.25], "total": 1201.5}
+    assert elapsed >= 6

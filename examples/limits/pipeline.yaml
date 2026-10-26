@@ -1,0 +1,90 @@
+# Named limits. Four numbers go through a chain of fanned arithmetic steps (one `arith`
+# ref, the operation set per node by `args`), then through `bulky-task`, which takes 3 s
+# per number and is capped at two at a time by the pipeline's `limits: {bulky: 2}`.
+#
+#   src      emits [1, 2, 3, 4]
+#   plus     x + 10      \
+#   minus    x - 1        |  each scattered: one process per number,
+#   times    x * 3        |  up to the backend's `concurrency: 4` at once
+#   half     x / 2       /
+#   bulky    x * x, 3 s each, 2 at a time: ~6 s for the four, not 3
+#   sum      adds them up: 1201.5
+#
+# The scripts use the node SDK (`cascade.node`), so each ref says `wrap: false`.
+entrypoint: main
+
+input: []
+
+# At most 2 refs saying `limit: bulky` at once, wherever they run. This is below the
+# deployment's backend `concurrency: 4`, so it is the one that holds `bulky-task` back.
+limits:
+  bulky: 2
+
+refs:
+  - name: numbers
+    runner: subprocess
+    resources: { cpu: 0.5, memory: 256MiB }
+    config: { cmd: ["python", "numbers.py"], wrap: false }
+    input: []
+    output: [ { name: numbers, type: "float[]" } ]
+
+  - name: arith
+    runner: subprocess
+    resources: { cpu: 0.5, memory: 256MiB }
+    config: { cmd: ["python", "arith.py"], wrap: false }
+    input:  [ { name: x, type: float } ]
+    output: [ { name: y, type: float } ]
+
+  - name: bulky-task
+    runner: subprocess
+    resources: { cpu: 1, memory: 512MiB }
+    limit: bulky            # the class of work; `limits:` above says how many at once
+    config: { cmd: ["python", "bulky.py"], wrap: false }
+    input:  [ { name: x, type: float } ]
+    output: [ { name: y, type: float } ]
+
+  - name: total
+    runner: subprocess
+    resources: { cpu: 0.5, memory: 256MiB }
+    config: { cmd: ["python", "total.py"], wrap: false }
+    input:  [ { name: xs, type: "float[]" } ]
+    output: [ { name: total, type: float } ]
+
+dags:
+  - name: main
+    input: []
+    nodes:
+      - name: src
+        runs: numbers
+        args: { count: 4 }
+      - name: plus
+        runs: arith
+        scatter: x
+        args: { op: add, by: 10 }
+        depends_on: [ { node: src, field: numbers, as: x } ]
+      - name: minus
+        runs: arith
+        scatter: x
+        args: { op: sub, by: 1 }
+        depends_on: [ { node: plus, field: y, as: x } ]
+      - name: times
+        runs: arith
+        scatter: x
+        args: { op: mul, by: 3 }
+        depends_on: [ { node: minus, field: y, as: x } ]
+      - name: half
+        runs: arith
+        scatter: x
+        args: { op: div, by: 2 }
+        depends_on: [ { node: times, field: y, as: x } ]
+      - name: bulky
+        runs: bulky-task
+        scatter: x
+        args: { seconds: 3 }
+        depends_on: [ { node: half, field: y, as: x } ]
+      - name: sum
+        runs: total
+        depends_on: [ { node: bulky, field: y, as: xs } ]
+    output:
+      - { node: bulky, field: y, as: squares }
+      - { node: sum, field: total, as: total }

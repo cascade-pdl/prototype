@@ -2,7 +2,8 @@
 
 Everything the executor needs and nothing it does not — per-dag node graphs to
 schedule, signatures to load/store data, per-ref run config to launch nodes, the
-type environment for runtime payload validation, and the entrypoint. Pointedly
+type environment for runtime payload validation, the named limits' capacities, and the
+entrypoint. Pointedly
 *not* the Pipeline, the passes, or graphlib.
 
 It is strict and canonical: a given pipeline compiles to one Plan, every runnable
@@ -24,7 +25,7 @@ from cascade.plan.type_env import TypeEnv
 from cascade.plan.run_config import RunConfig
 
 
-PLAN_VERSION = 10
+PLAN_VERSION = 11
 
 
 class PlanVersionError(Exception):
@@ -39,6 +40,7 @@ class Plan:
     run_config: dict[str, RunConfig]
     type_env: TypeEnv
     dag_outputs: dict[str, list[Dependency]] = field(default_factory=dict)
+    limits: dict[str, int] = field(default_factory=dict)
     version: int = PLAN_VERSION
 
     def encode(self) -> dict[str, Any]:
@@ -55,6 +57,7 @@ class Plan:
                 name: [dep.encode() for dep in deps]
                 for name, deps in self.dag_outputs.items()
             },
+            "limits": dict(self.limits),
             "type_env": self.type_env.encode(),
         }
 
@@ -78,5 +81,6 @@ class Plan:
                 name: [Dependency.decode(dep) for dep in deps]
                 for name, deps in raw.get("dag_outputs", {}).items()
             },
+            limits=dict(raw["limits"]),
             type_env=TypeEnv.decode(raw["type_env"]),
         )

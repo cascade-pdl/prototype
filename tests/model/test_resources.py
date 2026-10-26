@@ -75,6 +75,7 @@ PIPELINE = """
 entrypoint: main
 input: []
 types: { structures: [] }
+limits: { heavy: 1 }
 refs:
   - name: r
     runner: %RUNNER%

@@ -124,6 +124,7 @@ def compile_pipeline(pipeline: Pipeline, base: Path | None = None) -> Plan:
         run_config=run_config,
         dag_outputs=dag_outputs,
         type_env=type_env,
+        limits=dict(pipeline.limits),
     )
 
 

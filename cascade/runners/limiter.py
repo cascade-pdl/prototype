@@ -10,9 +10,9 @@ and every nesting level of the run, not per node. It holds two kinds of pool:
 
 - a **backend** pool per backend with a ``concurrency``: how many tasks run there at once
   (Fargate does not queue, so past the account quota ``RunTask`` simply fails);
-- a **named** pool per entry of the deployment's ``limits:``: a class of work wherever it
+- a **named** pool per entry of the pipeline's ``limits:``: a class of work wherever it
   runs, or a shared outside resource (an API, a database, a licence). A ref names its
-  class with ``limit:``; the deployment says how many.
+  class with ``limit:``; the pipeline says how many.
 
 A leaf takes **all its pools in one step**: it waits until each has room, then takes them
 together, so it never holds one slot while waiting for another, and two pools cannot

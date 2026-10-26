@@ -21,17 +21,20 @@ from cascade.plan.build import call_graph_of, reachable_from
 def slice_plan(plan: Plan, root: str) -> Plan:
     """Return a smaller Plan containing only what is reachable from ``root``.
 
-    Scopes node_graphs, signatures, and run_config together by one reachable set;
+    Scopes node_graphs, signatures, and run_config together by one reachable set, and
+    keeps the limits its refs name, so a slice run on its own is still capped;
     ``type_env`` is kept whole (structures are cheap; finer type slicing is a later
     optimisation). The returned plan's entrypoint is ``root``."""
     call = call_graph_of(plan.node_graphs)
     keep = reachable_from(call, root)
+    labels = {c.limit for n, c in plan.run_config.items() if n in keep}
     return Plan(
         entrypoint=root,
         node_graphs={n: g for n, g in plan.node_graphs.items() if n in keep},
         signatures={n: s for n, s in plan.signatures.items() if n in keep},
         run_config={n: c for n, c in plan.run_config.items() if n in keep},
         dag_outputs={n: o for n, o in plan.dag_outputs.items() if n in keep},
+        limits={label: n for label, n in plan.limits.items() if label in labels},
         type_env=plan.type_env,
         version=plan.version,
     )

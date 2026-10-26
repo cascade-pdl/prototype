@@ -36,6 +36,7 @@ def validate_edges(
 
     errors += _check_reserved_names(pipeline)
     errors += _check_ref_resources(pipeline)
+    errors += _check_limits(pipeline)
     errors += _check_encodings(pipeline)
 
     if type_env is not None:
@@ -204,6 +205,23 @@ def _check_encodings(pipeline: Pipeline) -> list[str]:
                     "ref transcodes, and the store is canonical JSON"
                 )
     return errors
+
+
+def _check_limits(pipeline: Pipeline) -> list[str]:
+    """Ref ``limit:`` labels the pipeline's ``limits:`` does not declare.
+
+    An error rather than "unlimited": a limit that silently stops applying is how a run
+    floods an API the author capped. A declared label no ref uses is fine; a typo on the
+    ref side is caught here."""
+    wanting: dict[str, list[str]] = {}
+    for ref in pipeline.refs:
+        if ref.limit is not None and ref.limit not in pipeline.limits:
+            wanting.setdefault(ref.limit, []).append(ref.name)
+    return [
+        f"ref(s) {sorted(refs)} count against limit {label!r}, which the pipeline's "
+        "`limits:` does not declare"
+        for label, refs in sorted(wanting.items())
+    ]
 
 
 def _check_ref_resources(pipeline: Pipeline) -> list[str]:

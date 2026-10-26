@@ -1,0 +1,14 @@
+# This machine: a file store beside the project, every ref on the local backend.
+name: local
+
+store:
+  kind: file
+  config:
+    root: ./_store
+    scope: [limits]
+
+backends:
+  - name: local
+    kind: local
+    max: { cpu: 4, memory: 8GiB }
+    concurrency: 4          # at most 4 refs at once on this machine, whatever they are
