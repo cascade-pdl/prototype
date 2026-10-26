@@ -4,6 +4,8 @@ The interchange property (a deployment's store block decodes through the
 registry's *store-level* decode into a live store) is the invariant the whole
 deployment -> engine -> node-env hop rests on, so it gets its own test.
 """
+import copy
+
 from cascade.deployment import Deployment
 from cascade.store.file_store import FileConfig, FileStore
 from cascade.store.s3_store import S3Config
@@ -31,11 +33,17 @@ def test_s3_store_round_trip():
     assert back.store.bucket == "wilder-data"
     assert back.store.prefix == "moth"
     assert back.store.region == "eu-west-1"
+    assert back.store.endpoint is None
+
+
+def test_an_s3_compatible_endpoint_round_trips():
+    dep = Deployment(store=S3Config(bucket="b", region="garage", endpoint="http://localhost:3900"))
+    assert Deployment.decode(dep.encode()).store.endpoint == "http://localhost:3900"
 
 
 BACKENDS = [
     {"name": "local", "kind": "local", "max": {"cpu": 4, "memory": "8GiB"},
-     "concurrency": 2, "config": {"aws_credentials_dir": "~/.aws", "no_pull": False}},
+     "concurrency": 2, "config": {"no_pull": False}},
     {"name": "ecs-gpu", "kind": "ecs", "max": {"cpu": 32, "memory": "240GiB", "gpu": 4},
      "provides": ["www"], "concurrency": 4,
      "config": {"cluster": "c", "subnets": ["s1"], "capacity_provider": "gpu-asg"}},
@@ -55,6 +63,14 @@ def test_backends_decode_in_order_with_typed_config():
     assert gpu.max == Resources(cpu=32, memory=240 * 1024, gpu=4)
     assert gpu.provides == {"www"}
     assert isinstance(gpu.config, EcsConfig) and gpu.config.capacity_provider == "gpu-asg"
+
+
+def test_the_old_credentials_mount_is_refused():
+    """Ignoring it would lose the credentials silently and fail at the first store access."""
+    raw = copy.deepcopy(_raw())
+    raw["backends"][0]["config"]["aws_credentials_dir"] = "~/.aws"
+    with pytest.raises(DeploymentError, match="credentials endpoint"):
+        Deployment.decode(raw)
 
 
 def test_backends_round_trip():

@@ -47,8 +47,6 @@ class LocalConfig:
     unportable.
     """
 
-    aws_credentials_dir: str | None = None
-    """Host path mounted at ``~/.aws`` in docker containers."""
     map_current_user: bool = True
     """Run containers as the invoking user, so files they write are owned by them."""
     no_pull: bool = True
@@ -61,11 +59,16 @@ class LocalConfig:
 
     @classmethod
     def decode(cls, raw: Mapping[str, Any]) -> Self:
-        _reject_unknown(
-            "local config", raw, {"aws_credentials_dir", "map_current_user", "no_pull", "bundle"}
-        )
+        if "aws_credentials_dir" in raw:
+            # refused rather than ignored: a run that silently lost its credentials would
+            # fail at the first store access, far from the cause
+            raise BackendError(
+                "local config: `aws_credentials_dir` is gone; docker containers now get "
+                "the credentials this machine uses for the store from a credentials "
+                "endpoint, as an ECS task gets its role. Remove the setting."
+            )
+        _reject_unknown("local config", raw, {"map_current_user", "no_pull", "bundle"})
         return cls(
-            aws_credentials_dir=raw.get("aws_credentials_dir"),
             map_current_user=raw.get("map_current_user", True),
             no_pull=raw.get("no_pull", True),
             bundle=raw.get("bundle"),
@@ -73,7 +76,6 @@ class LocalConfig:
 
     def encode(self) -> dict[str, Any]:
         return {
-            "aws_credentials_dir": self.aws_credentials_dir,
             "map_current_user": self.map_current_user,
             "no_pull": self.no_pull,
             "bundle": self.bundle,

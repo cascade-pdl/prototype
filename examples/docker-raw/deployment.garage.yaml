@@ -1,0 +1,24 @@
+# This machine against a local S3 store: `cascade dev garage up`, then
+#   eval "$(cascade dev garage env)"
+#   cascade run pipeline.yaml --deployment deployment.garage.yaml
+# Containers get the shell's keys from the run's credentials endpoint; nothing secret here.
+name: local-garage
+
+store:
+  kind: s3
+  config:
+    bucket: cascade
+    region: garage
+    endpoint: http://localhost:3900
+    scope: [docker-raw]
+
+backends:
+  - name: local
+    kind: local
+    max: { cpu: 4, memory: 8GiB }
+    concurrency: 4
+    config:
+      # the unpacked bundle from bundle/build.sh, mounted read-only into every wrapped
+      # container at /opt/cascade; relative to this directory
+      bundle: ../../dist/bundle/opt-cascade
+      no_pull: false

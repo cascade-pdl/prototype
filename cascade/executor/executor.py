@@ -19,6 +19,9 @@ What it owns is everything that is true once per run rather than once per node:
   anything is written or started, so a node too big for ECS is refused up front;
 - **the placement** — which backend each ref runs on, decided once from the plan and
   the deployment before anything starts, and bound into the ref builder;
+- **container access** — when a ref runs in a local docker container: the network it
+  joins, and, with an S3 store, the endpoint its containers fetch credentials from, served
+  for exactly the run's lifetime;
 - **the limits** — the backends' ``concurrency`` and the plan's named ``limits``,
   counted across the whole run by the ref builder made for it;
 - **the plan** — written into the run's scope, so a completed run is self-describing:
@@ -30,20 +33,30 @@ What it owns is everything that is true once per run rather than once per node:
 from __future__ import annotations
 
 import secrets
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from cascade.deployment import Deployment
+from cascade.docker.images import ImageConfig
+from cascade.docker.network import NetworkError, ensure_network
 from cascade.plan.plan import Plan
 from cascade.store.base import Store
 from cascade.store.registry import from_config
+from cascade.store.s3_store import S3Config
 
 from cascade.protocol.binding import INPUTS_SCOPE, InputBinding, InputBindings
 from cascade.protocol.instance_path import InstancePath
 from cascade.protocol.run_spec import RunSpec, SpecTooLarge, check_launch
 from cascade.protocol.runner import Runner
 from cascade.runners.build import RefRunnerBuilder, configure_ref_builder
+from cascade.runners.credentials import (
+    ContainerCredentials,
+    CredentialsEndpoint,
+    CredentialsError,
+)
+from cascade.runners.docker import CONTAINER_NETWORK
 from cascade.runners.images import ImageBuildError, prepare_images, resolve_images
 from cascade.engine.dag import DagRunner
 from cascade.executor.placement import place
@@ -213,12 +226,37 @@ class Executor:
             images = await resolve_images(self.plan, self.placements, self._backends)
         except ImageBuildError as e:
             raise ExecutorError(str(e))
-        # a builder per run: it holds the run's concurrency limits
-        build_ref = self._build_ref or configure_ref_builder(
-            placements=self.placements, backends=self._backends, cwd=self.cwd, images=images,
-            limits=self.plan.limits,
-        )
+        with ExitStack() as access:
+            # ``images`` holds exactly the refs placed in local docker containers
+            credentials = await self._container_access(access) if images else None
+            # a builder per run: it holds the run's concurrency limits
+            build_ref = self._build_ref or configure_ref_builder(
+                placements=self.placements, backends=self._backends, cwd=self.cwd,
+                images=images, limits=self.plan.limits, credentials=credentials,
+            )
+            return await self._run(build_ref, images, inputs, run_id)
 
+    async def _container_access(self, access: ExitStack) -> ContainerCredentials | None:
+        """The network local containers join, made if missing, and with an S3 store the
+        credentials endpoint they fetch from, open until ``access`` closes."""
+        try:
+            await ensure_network(CONTAINER_NETWORK)
+        except NetworkError as e:
+            raise ExecutorError(str(e))
+        if not isinstance(self._base.config, S3Config):
+            return None
+        try:
+            return access.enter_context(CredentialsEndpoint(CONTAINER_NETWORK.gateway))
+        except (CredentialsError, OSError) as e:
+            raise ExecutorError(f"cannot serve credentials to containers: {e}")
+
+    async def _run(
+        self,
+        build_ref: RefRunnerBuilder,
+        images: Mapping[str, ImageConfig],
+        inputs: Mapping[str, Any] | None,
+        run_id: str | None,
+    ) -> RunResult:
         run_id = run_id or new_run_id()
         dag = self.plan.entrypoint
         path = InstancePath.root(run_id).child(dag)

@@ -85,6 +85,37 @@ the named build context `cascade` (`COPY --from=cascade . /src/cascade`), which 
 fills from this checkout; cascade's source then counts towards the hash. Pin `FROM`
 images by digest: a moving tag can change under the same hash.
 
+## S3 stores and credentials in containers
+
+A deployment's `store:` may be S3 or an S3-compatible service (garage, MinIO), named by
+`endpoint`; omit it for AWS itself:
+
+    store:
+      kind: s3
+      config: { bucket: cascade, region: garage, endpoint: http://localhost:3900 }
+
+Local docker containers run on the docker network `cascade` (`169.254.170.0/24`, created
+when missing). With an S3 store, the run serves the credentials it uses itself (env,
+profile or SSO) on the network's gateway, `169.254.170.2`, and containers fetch them
+there as an ECS task fetches its role (`AWS_CONTAINER_CREDENTIALS_FULL_URI` plus a
+per-run token): no keys in the image, nothing mounted, refreshed for long tasks. An
+endpoint on the host's loopback is reached by containers at the gateway, so a local
+service is published there as well as on loopback (`-p 127.0.0.1:3900:3900 -p
+169.254.170.2:3900:3900`).
+
+For development, `cascade dev garage up` runs garage that way with fixed values (port
+3900, bucket `cascade`, region `garage`; data in the volume `cascade-garage`, keys under
+`~/.local/state/cascade/garage`), so the deployment pointing at it is a constant: the
+docker examples commit theirs as `deployment.garage.yaml`.
+
+    cascade dev garage up
+    eval "$(cascade dev garage env)"      # its keys become this shell's AWS identity
+    cascade run pipeline.yaml --deployment deployment.garage.yaml
+    cascade dev garage down [--purge]
+
+Not a compose file: the network must exist before garage can publish on its gateway,
+and garage's layout, bucket and key are made through its own CLI.
+
 ## Not yet built (deliberate)
 
 - Type *identity* validation is name + arity only — exact match, no subtyping.

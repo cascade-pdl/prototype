@@ -4,6 +4,7 @@ No docker daemon is needed: the command line is inspected, and the client is a r
 process standing in for ``docker run`` while ``docker stop`` is intercepted.
 """
 import asyncio
+import json
 
 import pytest
 
@@ -11,7 +12,9 @@ import os
 
 from cascade.protocol.run_spec import SPEC_BUDGET, RunSpec, SpecTooLarge
 from cascade.store.file_store import FileConfig, FileStore
+from cascade.runners.credentials import ContainerCredentials
 from cascade.runners.docker import (
+    CONTAINER_NETWORK,
     DockerImageError,
     HandleDocker,
     ImageConfig,
@@ -209,21 +212,71 @@ def test_an_unwrapped_resolved_image_runs_by_id_too():
 
 def test_the_launch_is_exactly_what_the_command_line_passes(tmp_path):
     """The budget is checked on ``launch_for``, so it must be what ``docker run`` gets:
-    the container's env (store rerooted, HOME for credentials) and the command after
-    the image."""
+    the container's env (store rerooted) and the command after the image. Credentials
+    are passed besides, by name: on ECS the agent sets its own."""
     store = FileStore(FileConfig(root=str(tmp_path / "s"), scope=("r", "n")))
     spec = RunSpec(name="n", run_id="r", store_out=store, args={"k": 1})
-    runner = RunnerDocker(
-        image="tool:1", bundle="/b", resolved=IMAGE, aws_credentials_dir=str(tmp_path)
-    )
+    runner = RunnerDocker(image="tool:1", bundle="/b", resolved=IMAGE, credentials=CREDENTIALS)
     launch = runner.launch_for(spec)
     cmd = runner._build_cmd(spec, name="c", image=IMAGE)
 
     passed = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-e"]
-    assert passed == [f"{k}={v}" for k, v in launch.env.items()]
+    assert passed == [f"{k}={v}" for k, v in launch.env.items()] + list(CREDENTIALS.env())
     assert '"/cascade/store"' in launch.env["CASCADE_STORE_OUT"]
-    assert "HOME" in launch.env
+    assert not set(CREDENTIALS.env()) & set(launch.env)
     assert cmd[cmd.index("sha256:abc") + 1:] == list(launch.command)
+
+
+# --- the network, credentials, and a store on the host ---------------------------
+
+CREDENTIALS = ContainerCredentials(uri="http://169.254.170.2:1/credentials", token="secret")
+
+
+def test_the_token_is_never_on_the_command_line():
+    cmd = RunnerDocker(image="t:1", credentials=CREDENTIALS)._build_cmd(SPEC)
+    assert not [a for a in cmd if "secret" in a]
+
+
+@pytest.mark.asyncio
+async def test_the_credentials_reach_the_docker_client_environment(monkeypatch):
+    seen = {}
+    real_exec = asyncio.create_subprocess_exec
+
+    async def record(*argv, env=None, **kwargs):
+        seen.update(env or {})
+        return await real_exec("true")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", record)
+    handle = await RunnerDocker(image="t:1", credentials=CREDENTIALS).spawn(SPEC)
+    await handle.await_done()
+    assert seen["AWS_CONTAINER_AUTHORIZATION_TOKEN"] == "secret"
+    assert seen["PATH"] == os.environ["PATH"]  # the client's own environment kept
+
+
+def test_the_container_joins_the_network():
+    cmd = RunnerDocker(image="t:1", network=CONTAINER_NETWORK)._build_cmd(SPEC)
+    assert cmd[cmd.index("--network") + 1] == "cascade"
+
+
+def _s3_spec(endpoint):
+    from cascade.store.s3_store import S3Config, S3Store
+
+    config = S3Config(bucket="b", region="garage", endpoint=endpoint, scope=("r",))
+    return RunSpec(name="n", run_id="r", store_in=S3Store(config), store_out=S3Store(config))
+
+
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "127.1.2.3", "[::1]"])
+def test_a_store_on_the_host_loopback_is_reached_at_the_gateway(host):
+    runner = RunnerDocker(image="t:1", network=CONTAINER_NETWORK)
+    env = runner.launch_for(_s3_spec(f"http://{host}:3900/x")).env
+    for key in ("CASCADE_STORE_IN", "CASCADE_STORE_OUT"):
+        assert json.loads(env[key])["config"]["endpoint"] == "http://169.254.170.2:3900/x"
+
+
+@pytest.mark.parametrize("endpoint", [None, "https://s3.example.org", "http://10.0.0.5:3900"])
+def test_other_endpoints_are_left_alone(endpoint):
+    env = RunnerDocker(image="t:1", network=CONTAINER_NETWORK).launch_for(_s3_spec(endpoint)).env
+    assert json.loads(env["CASCADE_STORE_OUT"])["config"]["endpoint"] == endpoint
 
 
 def test_a_wrapped_launch_is_unknown_until_the_image_is_resolved():

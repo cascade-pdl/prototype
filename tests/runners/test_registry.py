@@ -68,11 +68,16 @@ def test_docker_no_pull_defaults_to_true():
 def test_the_backend_supplies_the_machine_settings():
     runner = build_runner(
         RunConfig(config=RefDocker(image="x:1", wrap=False)),
-        _local(no_pull=False, map_current_user=False, aws_credentials_dir="~/.aws"),
+        _local(no_pull=False, map_current_user=False),
     )
-    assert (runner.no_pull, runner.map_current_user, runner.aws_credentials_dir) == (
-        False, False, "~/.aws"
-    )
+    assert (runner.no_pull, runner.map_current_user) == (False, False)
+
+
+def test_a_local_docker_runner_joins_the_container_network():
+    from cascade.runners.docker import CONTAINER_NETWORK
+
+    runner = build_runner(RunConfig(config=RefDocker(image="x:1", wrap=False)), _local())
+    assert runner.network == CONTAINER_NETWORK
 
 
 def test_ecs_is_placeable_but_not_built_yet():
@@ -224,25 +229,11 @@ def test_no_mount_when_there_is_no_file_store():
     assert "-v" not in runner._build_cmd(spec)
 
 
-def test_home_is_not_forced_when_no_credentials_are_mounted(tmp_path):
+def test_home_is_never_forced(tmp_path):
     """Forcing HOME breaks any image that pip-installed as its own user: the packages sit
     in that user's ~/.local, and a different HOME hides them."""
     runner, spec = _docker_for(tmp_path=tmp_path)
     assert not [c for c in runner._build_cmd(spec) if c.startswith("HOME=")]
-
-
-def test_home_is_set_when_credentials_are_mounted(tmp_path):
-    """boto looks for ~/.aws, so the mount and HOME have to agree — and that is the only
-    reason to set it."""
-    from cascade.protocol.run_spec import RunSpec
-
-    runner = build_runner(
-        RunConfig(config=RefDocker(image="x:1", wrap=False)),
-        _local(aws_credentials_dir=str(tmp_path / ".aws")),
-    )
-    cmd = runner._build_cmd(RunSpec(name="n", run_id="r"))
-    home = [c.split("=", 1)[1] for c in cmd if c.startswith("HOME=")][0]
-    assert any(c.endswith(f"{home}/.aws:ro") for c in cmd)
 
 # --- wrapping: the bundle path and the opt-out --------------------------------
 

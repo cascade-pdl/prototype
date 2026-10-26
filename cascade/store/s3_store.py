@@ -16,6 +16,9 @@ class S3Config(StoreConfig):
     prefix: str = ""
     region: str | None = None
     scope: tuple[str, ...] = ()
+    endpoint: str | None = None
+    """An S3-compatible service's URL (garage, MinIO); absent for AWS itself, whose
+    endpoint boto derives from the region."""
 
     def subscope(self, scope: tuple[str, ...]):
         return replace(self, scope=(*self.scope, *scope))
@@ -51,6 +54,7 @@ class S3Store(Store):
         self.prefix = config.prefix.rstrip("/")
         self.scope = tuple(config.scope)
         self.region = config.region
+        self.endpoint = config.endpoint
         self._client = None  # lazy: only build the boto3 client when first used
 
     @property
@@ -58,7 +62,9 @@ class S3Store(Store):
         if self._client is None:
             import boto3
 
-            self._client = boto3.client("s3", region_name=self.region)
+            self._client = boto3.client(
+                "s3", region_name=self.region, endpoint_url=self.endpoint
+            )
         return self._client
 
     def _build_key(self, key: str | None = None, at: tuple[str, ...] = ()) -> str:

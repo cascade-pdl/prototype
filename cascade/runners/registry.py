@@ -8,7 +8,7 @@ meet and produce something spawnable.
 **Two inputs, no precedence between them.** They say different things, so nothing is
 merged: the ref says *what* runs and how big it is (an image is an image, and the
 resources are the allocation as well as the minimum); the backend says *where* and with
-which machine settings (credentials, user mapping, pull policy). The per-kind override
+which machine settings (user mapping, pull policy). The per-kind override
 layer that used to merge ref and deployment defaults is gone — sizes moved to the ref's
 ``resources``, machine settings to the backend's ``config``.
 
@@ -33,7 +33,8 @@ from cascade.substrate.backends import Backend, BackendKind, LocalConfig, RUNS, 
 
 from cascade.protocol.runner import Runner
 from cascade.docker.images import ImageConfig
-from cascade.runners.docker import RunnerDocker
+from cascade.runners.credentials import ContainerCredentials
+from cascade.runners.docker import CONTAINER_NETWORK, RunnerDocker
 from cascade.runners.images import image_of
 from cascade.runners.echo import RunnerEcho
 from cascade.runners.process import RunnerSubprocess
@@ -53,6 +54,7 @@ def _build_local_docker(
     signature: Signature | None = None,
     cwd: str | None = None,
     image: ImageConfig | None = None,
+    credentials: ContainerCredentials | None = None,
 ) -> Runner:
     ref, local = config.config, backend.config
     assert isinstance(ref, RefDocker) and isinstance(local, LocalConfig)
@@ -65,12 +67,13 @@ def _build_local_docker(
         # it from
         no_pull=local.no_pull or ref.build is not None,
         map_current_user=local.map_current_user,
-        aws_credentials_dir=local.aws_credentials_dir,
         memory=resources.memory if resources else None,
         cpu=resources.cpu if resources else None,
         gpu=resources.gpu if resources else 0,
         command=None if ref.command is None else list(ref.command),
         bundle=_bundle_path(backend, cwd) if ref.wrap else None,
+        network=CONTAINER_NETWORK,
+        credentials=credentials,
     )
 
 
@@ -102,6 +105,7 @@ def _build_local_subprocess(
     signature: Signature | None = None,
     cwd: str | None = None,
     image: ImageConfig | None = None,
+    credentials: ContainerCredentials | None = None,
 ) -> Runner:
     # resources are matched and counted, not enforced: a plain process has no cap
     ref = config.config
@@ -115,6 +119,7 @@ def _build_ecs_docker(
     signature: Signature | None = None,
     cwd: str | None = None,
     image: ImageConfig | None = None,
+    credentials: ContainerCredentials | None = None,
 ) -> Runner:
     raise RunnerKindError(
         f"backend {backend.name!r} is ECS, and the ECS runner is not built yet"
@@ -150,6 +155,7 @@ def build_runner(
     signature: Signature | None = None,
     cwd: str | None = None,
     image: ImageConfig | None = None,
+    credentials: ContainerCredentials | None = None,
 ) -> Runner:
     """Build the live runner for one ref on the backend it was placed on.
 
@@ -169,4 +175,8 @@ def build_runner(
             f"a {backend.kind.value} backend ({backend.name!r}) cannot run a "
             f"{config.runner.value} ref"
         )
-    return build(config, backend, signature=signature, cwd=cwd, image=image)
+    # only the local docker builder uses credentials: an ECS task has its role, and must
+    # never be handed this machine's identity
+    return build(
+        config, backend, signature=signature, cwd=cwd, image=image, credentials=credentials
+    )

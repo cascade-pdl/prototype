@@ -1,19 +1,24 @@
 import asyncio
+import ipaddress
 import os
 import re
 import secrets
 from dataclasses import replace
+from urllib.parse import urlsplit, urlunsplit
 
 from cascade.docker import containers, images
 from cascade.docker.images import ImageConfig
+from cascade.docker.network import Network
 from cascade.protocol.bundle import BUNDLE_ENTRYPOINT, BUNDLE_ROOT, STAGING_ROOT, wrap_args
 from cascade.protocol.runner import Runner
 from cascade.protocol.run_status import RunStatus
+from cascade.runners.credentials import ContainerCredentials
 from cascade.runners.process import HandleSubprocess
 from cascade.protocol.run_spec import Launch, RunSpec, check_launch, to_env
 from cascade.store.base import Store
 from cascade.store.file_store import FileConfig
 from cascade.store.registry import from_config
+from cascade.store.s3_store import S3Config
 
 
 CONTAINER_STORE_ROOT = "/cascade/store"
@@ -24,6 +29,17 @@ mount target for a Linux container on Windows (``-v C:\\x:C:\\x`` is meaningless
 runner mounts host→here and rewrites the store root in the spec it hands the container.
 The translation belongs here: the runner is the only component that knows a container is
 involved, and scopes are untouched, so all addressing still resolves.
+"""
+
+CONTAINER_NETWORK = Network(name="cascade", subnet="169.254.170.0/24", gateway="169.254.170.2")
+"""The network local docker containers run on.
+
+Its gateway, the host's side of the bridge, is ECS's credentials address: botocore fetches
+container credentials over plain http only from loopback or that address, and this way the
+executor serves them from the host (``cascade.runners.credentials``). AWS's own local ECS
+emulation uses the same subnet. The gateway is also how a container reaches anything else
+the host serves, such as a local S3 service: a store endpoint on the host's loopback is
+rewritten to it.
 """
 
 
@@ -89,13 +105,14 @@ class RunnerDocker(Runner):
         no_pull: bool = True,
         extra_args: list[str] | None = None,
         map_current_user: bool = True,
-        aws_credentials_dir: str | None = None,
         memory: int | None = None,
         cpu: float | None = None,
         gpu: int = 0,
         command: list[str] | None = None,
         bundle: str | None = None,
         resolved: ImageConfig | None = None,
+        network: Network | None = None,
+        credentials: ContainerCredentials | None = None,
     ):
         """``memory`` in MiB, ``cpu`` in vCPU, ``gpu`` a count: the ref's resources,
         which on docker are the allocation as well as the minimum."""
@@ -103,7 +120,6 @@ class RunnerDocker(Runner):
         self.no_pull = no_pull
         self.extra_args = extra_args or []
         self.map_current_user = map_current_user
-        self.aws_credentials_dir = aws_credentials_dir
         self.memory = memory
         self.cpu = cpu
         self.gpu = gpu
@@ -112,9 +128,12 @@ class RunnerDocker(Runner):
         self.resolved = resolved
         """The image as resolved once for the run; runs use its id and ask Docker
         nothing first. Without it, a wrapped run inspects the image at every spawn."""
-
-    def _home(self) -> str:
-        return "/tmp" if self.map_current_user and hasattr(os, "getuid") else "/root"
+        self.network = network
+        """Joined by the container; a store endpoint on the host's loopback is reached at
+        its gateway."""
+        self.credentials = credentials
+        """Where the container fetches its AWS credentials. Not part of the launch: on
+        ECS the agent sets its own, so they count towards no budget."""
 
     def launch_for(self, spec: RunSpec, image: ImageConfig | None = None) -> Launch | None:
         """The container's env and what follows the image on the command line.
@@ -123,15 +142,7 @@ class RunnerDocker(Runner):
         wrapped run whose image is not resolved yet: the command comes from the image.
         """
         image = image or self.resolved
-        # a host file store is mounted at a fixed path, so the container is told that one
-        if _file_store_roots(spec):
-            spec = _rerooted(spec, CONTAINER_STORE_ROOT)
-        env = to_env(spec=spec)
-        if self.aws_credentials_dir:
-            # HOME is set *only* here, and only because boto looks for ~/.aws. Forcing it
-            # otherwise breaks any image that pip-installed as its own user: the packages
-            # sit in that user's ~/.local, and a different HOME hides them.
-            env["HOME"] = self._home()
+        env = to_env(spec=self._as_seen_inside(spec))
 
         if self.bundle is None:
             return Launch(env=env, command=list(self.command or ()))
@@ -173,9 +184,8 @@ class RunnerDocker(Runner):
             os.makedirs(host_roots[0], exist_ok=True)
             cmd += ["-v", f"{host_roots[0]}:{CONTAINER_STORE_ROOT}"]
 
-        if self.aws_credentials_dir:
-            host_aws = os.path.abspath(os.path.expanduser(self.aws_credentials_dir))
-            cmd += ["-v", f"{host_aws}:{self._home()}/.aws:ro"]
+        if self.network is not None:
+            cmd += ["--network", self.network.name]
 
         # the ref's resources: hard caps, so a task that outgrows them fails here the
         # way it would on ECS
@@ -188,6 +198,10 @@ class RunnerDocker(Runner):
 
         for k, v in launch.env.items():
             cmd += ["-e", f"{k}={v}"]
+        # by name only: the values come from the client's environment (``spawn``), so the
+        # token is not on a command line anyone can read
+        for k in self.credentials.env() if self.credentials else ():
+            cmd += ["-e", k]
 
         if self.bundle is None:
             cmd += self.extra_args
@@ -208,12 +222,32 @@ class RunnerDocker(Runner):
         image = self.resolved
         if image is None and self.bundle is not None:
             image = await inspect_image(self.image, pull=not self.no_pull)
+        env = {**os.environ, **self.credentials.env()} if self.credentials else None
         return HandleDocker(
             process=await asyncio.create_subprocess_exec(
-                *self._build_cmd(spec=spec, name=name, image=image),
+                *self._build_cmd(spec=spec, name=name, image=image), env=env,
             ),
             name=name,
         )
+
+    def _as_seen_inside(self, spec: RunSpec) -> RunSpec:
+        """The spec with its stores addressed as the container sees them: a host file
+        store at its mount point, a host-local S3 endpoint at the network's gateway."""
+        def inside(store: Store | None) -> Store | None:
+            config = getattr(store, "config", None)
+            if isinstance(config, FileConfig):
+                config = replace(config, root=CONTAINER_STORE_ROOT)
+            elif isinstance(config, S3Config) and self.network is not None:
+                config = replace(
+                    config, endpoint=_off_loopback(config.endpoint, self.network.gateway)
+                )
+            else:
+                return store
+            # constructing a store has no effect on the host (see ``FileStore``)
+            _kind, store_cls, _config_cls = from_config(config)
+            return store_cls(config)
+
+        return replace(spec, store_in=inside(spec.store_in), store_out=inside(spec.store_out))
 
 
 def _file_store_roots(spec: RunSpec) -> list[str]:
@@ -234,21 +268,18 @@ def _file_store_roots(spec: RunSpec) -> list[str]:
     return roots
 
 
-def _reroot(store: Store | None, root: str) -> Store | None:
-    """The same store, addressing the same scope, under a different root.
-
-    ``root`` is a path inside the container, so this relies on constructing a store
-    having no effect on the host (see ``FileStore``)."""
-    if store is None or not isinstance(store.config, FileConfig):
-        return store
-    config = replace(store.config, root=root)
-    _kind, store_cls, _config_cls = from_config(config)
-    return store_cls(config)
-
-
-def _rerooted(spec: RunSpec, root: str) -> RunSpec:
-    return replace(
-        spec,
-        store_in=_reroot(spec.store_in, root),
-        store_out=_reroot(spec.store_out, root),
-    )
+def _off_loopback(url: str | None, host: str) -> str | None:
+    """``url`` with a loopback host (``localhost``, ``127.0.0.0/8``, ``::1``) replaced by
+    ``host``; any other URL unchanged. Inside a container loopback is the container."""
+    if url is None:
+        return None
+    parts = urlsplit(url)
+    name = parts.hostname or ""
+    try:
+        loopback = name == "localhost" or ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        return url
+    netloc = host if parts.port is None else f"{host}:{parts.port}"
+    return urlunsplit(parts._replace(netloc=netloc))

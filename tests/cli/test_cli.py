@@ -184,6 +184,20 @@ def test_backend_flags_are_validated(tmp_path, monkeypatch, capsys):
     assert "requires --bucket" in capsys.readouterr().err
 
 
+def test_the_s3_flags_name_an_s3_compatible_endpoint():
+    import argparse
+
+    from cascade.cli._resolve import add_store_flags, build_store
+
+    parser = argparse.ArgumentParser()
+    add_store_flags(parser)
+    store = build_store(parser.parse_args([
+        "--backend", "s3", "--bucket", "b", "--region", "garage",
+        "--endpoint", "http://localhost:3900",
+    ]))
+    assert (store.config.region, store.config.endpoint) == ("garage", "http://localhost:3900")
+
+
 def test_fetch_missing_key_is_a_clean_error(project, monkeypatch, capsys):
     monkeypatch.chdir(project)
     assert main(["store", "fetch", "absent", str(project / "x")]) == 2

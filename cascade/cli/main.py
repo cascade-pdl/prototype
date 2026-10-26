@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from cascade.cli import author, new, node, placement, run, store
+from cascade.cli import author, dev, new, node, placement, run, store
 from cascade.cli.errors import CliError
 
 
@@ -25,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     placement.add_parsers(sub)
     node.add_parsers(sub)
     store.add_parsers(sub)
+    dev.add_parsers(sub)
     return parser
 
 

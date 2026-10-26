@@ -88,6 +88,10 @@ store:
 #     prefix: cascade
 #     region: eu-west-1
 #     scope: []
+#     endpoint: http://localhost:3900   # an S3-compatible service (garage); omit for AWS
+#
+# Docker containers get the credentials this machine uses for the store from a
+# credentials endpoint, as an ECS task gets its role; nothing is mounted.
 
 # Where refs run, in order of preference: each ref goes to the first backend that can
 # run its kind, whose `max` covers its resources and whose `provides` covers its
@@ -101,7 +105,6 @@ backends:
       no_pull: true         # use locally built images
       map_current_user: true
 #     bundle: path/to/dist/bundle/opt-cascade   # bundle/build.sh; needed by wrapped docker refs
-#     aws_credentials_dir: ~/.aws
 #
 # An ECS backend (needs an s3 store):
 #  - name: ecs-cpu

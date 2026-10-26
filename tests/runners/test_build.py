@@ -13,6 +13,7 @@ from cascade.model.pipeline import Pipeline
 from cascade.model.resources import Resources
 from cascade.plan.compile import compile_pipeline
 from cascade.runners import RunnerDocker, RunnerEcho
+from cascade.runners.credentials import ContainerCredentials
 from cascade.runners.build import build_ref, configure_ref_builder
 from cascade.runners.limiter import LimitedRunner, backend_pool, named_pool
 from cascade.substrate.backends import Backend, BackendKind, LocalConfig
@@ -68,14 +69,16 @@ def test_the_builder_turns_ref_data_into_a_runner(plan):
 
 
 def test_the_builder_never_sees_a_plan_or_a_deployment(plan):
-    """Two stages: placement, backends, the run's resolved images and its limits bound
+    """Two stages: placement, backends, the run's resolved images, its limits and where
+    its containers fetch credentials bound
     once, ref data passed per call. The name is ref data: it is the key into the
     placement the executor already decided, so the builder reads a decision rather than making one."""
     assert list(inspect.signature(configure_ref_builder).parameters) == [
-        "placements", "backends", "cwd", "images", "limits"
+        "placements", "backends", "cwd", "images", "limits", "credentials"
     ]
     assert list(inspect.signature(build_ref).parameters) == [
-        "name", "config", "signature", "placements", "backends", "cwd", "images", "limiter"
+        "name", "config", "signature", "placements", "backends", "cwd", "images", "limiter",
+        "credentials",
     ]
 
 
@@ -95,11 +98,19 @@ def test_the_backend_supplies_the_machine_settings(plan):
     that read none of it; they describe the machine, so they live with its backend."""
     build = configure_ref_builder(
         placements=PlacementMap((Placement("d", "here"),)),
-        backends=[_local(aws_credentials_dir="~/.aws", map_current_user=False)],
+        backends=[_local(no_pull=False, map_current_user=False)],
     )
     runner = build(*_ref(plan, "d"))
-    assert runner.aws_credentials_dir == "~/.aws"
-    assert runner.map_current_user is False
+    assert (runner.no_pull, runner.map_current_user) == (False, False)
+
+
+def test_the_runs_credentials_reach_its_local_docker_runners(plan):
+    credentials = ContainerCredentials(uri="http://169.254.170.2:1/credentials", token="t")
+    build = configure_ref_builder(
+        placements=PlacementMap((Placement("d", "here"),)), backends=[_local()],
+        credentials=credentials,
+    )
+    assert build(*_ref(plan, "d")).credentials == credentials
 
 
 def test_an_unplaced_ref_is_an_error_not_a_guess(plan):

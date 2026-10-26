@@ -4,7 +4,8 @@ Two stages, because two different things vary at two different times:
 
 - **run-wide settings** are fixed for a whole run: where each ref was placed, the backends
   it was placed on, where a relative command resolves, each docker ref's image as
-  resolved for the run, and the run's concurrency limits. Bound once, by
+  resolved for the run, where its containers fetch credentials, and the run's
+  concurrency limits. Bound once, by
   ``configure_ref_builder``.
 - **ref data** varies per node: the ref's name, its own config and its resolved ports.
   Passed at call time.
@@ -44,6 +45,7 @@ from cascade.plan.run_config import RunConfig
 from cascade.plan.signature import Signature
 from cascade.protocol.runner import Runner
 from cascade.docker.images import ImageConfig
+from cascade.runners.credentials import ContainerCredentials
 from cascade.runners.limiter import Limiter, LimitedRunner, Pool, backend_pool, named_pool
 from cascade.runners.registry import build_runner
 from cascade.substrate.backends import Backend
@@ -64,6 +66,7 @@ def build_ref(
     cwd: str | None = None,
     images: Mapping[str, ImageConfig] | None = None,
     limiter: Limiter | None = None,
+    credentials: ContainerCredentials | None = None,
 ) -> Runner:
     """Build one ref's runner on the backend it was placed on, holding its slots in
     ``limiter`` while it runs.
@@ -75,7 +78,7 @@ def build_ref(
     if config.runner is RunnerKind.echo:
         return build_runner(config, signature=signature, cwd=cwd)
     if placements is None:
-        runner = build_runner(config, signature=signature, cwd=cwd)
+        runner = build_runner(config, signature=signature, cwd=cwd, credentials=credentials)
         return _limited(runner, _named_pools(config, limiter), limiter)
     placed = placements.backend_of(name)
     if placed is None:
@@ -84,7 +87,9 @@ def build_ref(
     if backend is None:
         raise PlacementError([f"ref {name!r} is placed on unknown backend {placed!r}"])
     image = (images or {}).get(name)
-    runner = build_runner(config, backend, signature=signature, cwd=cwd, image=image)
+    runner = build_runner(
+        config, backend, signature=signature, cwd=cwd, image=image, credentials=credentials
+    )
     backend_pools = (backend_pool(backend.name),) if backend.concurrency is not None else ()
     return _limited(runner, backend_pools + _named_pools(config, limiter), limiter)
 
@@ -118,6 +123,7 @@ def configure_ref_builder(
     cwd: str | None = None,
     images: Mapping[str, ImageConfig] | None = None,
     limits: Mapping[str, int] | None = None,
+    credentials: ContainerCredentials | None = None,
 ) -> RefRunnerBuilder:
     """Bind the run-wide half, leaving a function of ref data alone.
 
@@ -136,7 +142,7 @@ def configure_ref_builder(
     def builder(name: str, config: RunConfig, signature: Signature | None = None) -> Runner:
         return build_ref(
             name, config, signature, placements=placements, backends=bound_backends,
-            cwd=cwd, images=bound_images, limiter=limiter,
+            cwd=cwd, images=bound_images, limiter=limiter, credentials=credentials,
         )
 
     return builder

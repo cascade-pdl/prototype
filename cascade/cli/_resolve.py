@@ -45,6 +45,8 @@ def add_store_flags(parser: argparse.ArgumentParser) -> None:
     g.add_argument("--bucket", help="[s3 backend] bucket name")
     g.add_argument("--prefix", default="", help="[s3 backend] key prefix")
     g.add_argument("--region", help="[s3 backend] AWS region")
+    g.add_argument("--endpoint", metavar="URL",
+                   help="[s3 backend] an S3-compatible service's URL (e.g. garage)")
     g.add_argument("--scope", nargs="*", metavar="SEG",
                    help="override the base scope tuple (applies to any backend)")
 
@@ -57,7 +59,10 @@ def _config_from_flags(args: argparse.Namespace) -> StoreConfig:
     if args.backend == "s3":
         if not args.bucket:
             raise CliError("--backend s3 requires --bucket")
-        return S3Config(bucket=args.bucket, prefix=args.prefix, region=args.region)
+        return S3Config(
+            bucket=args.bucket, prefix=args.prefix, region=args.region,
+            endpoint=args.endpoint,
+        )
     raise CliError(f"unknown backend {args.backend!r}")
 
 

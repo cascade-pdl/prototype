@@ -23,6 +23,7 @@ LAYERS = [
     "cascade.deployment",  # substrate configuration
     "cascade.project",
     "cascade.executor",    # the shell: turns a deployment into what the engine needs
+    "cascade.dev",         # development aids: local stand-ins (garage)
     "cascade.cli",
 ]
 RANK = {name: index for index, name in enumerate(LAYERS)}
