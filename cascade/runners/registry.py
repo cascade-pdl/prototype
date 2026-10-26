@@ -32,7 +32,8 @@ from cascade.plan.signature import Signature
 from cascade.substrate.backends import Backend, BackendKind, LocalConfig, RUNS, uncapped_local
 
 from cascade.protocol.runner import Runner
-from cascade.runners.docker import RunnerDocker
+from cascade.runners.docker import ImageConfig, RunnerDocker
+from cascade.runners.images import image_of
 from cascade.runners.echo import RunnerEcho
 from cascade.runners.process import RunnerSubprocess
 
@@ -50,14 +51,18 @@ def _build_local_docker(
     backend: Backend,
     signature: Signature | None = None,
     cwd: str | None = None,
+    image: ImageConfig | None = None,
 ) -> Runner:
     ref, local = config.config, backend.config
     assert isinstance(ref, RefDocker) and isinstance(local, LocalConfig)
     resources = config.resources
     return RunnerDocker(
-        image=ref.image,
+        image=image_of(ref),
+        resolved=image,
         extra_args=list(ref.extra_args),
-        no_pull=local.no_pull,
+        # a built image exists only here, made before the run: there is nowhere to pull
+        # it from
+        no_pull=local.no_pull or ref.build is not None,
         map_current_user=local.map_current_user,
         aws_credentials_dir=local.aws_credentials_dir,
         memory=resources.memory if resources else None,
@@ -95,6 +100,7 @@ def _build_local_subprocess(
     backend: Backend,
     signature: Signature | None = None,
     cwd: str | None = None,
+    image: ImageConfig | None = None,
 ) -> Runner:
     # resources are matched and counted, not enforced: a plain process has no cap
     ref = config.config
@@ -107,6 +113,7 @@ def _build_ecs_docker(
     backend: Backend,
     signature: Signature | None = None,
     cwd: str | None = None,
+    image: ImageConfig | None = None,
 ) -> Runner:
     raise RunnerKindError(
         f"backend {backend.name!r} is ECS, and the ECS runner is not built yet"
@@ -141,6 +148,7 @@ def build_runner(
     backend: Backend | None = None,
     signature: Signature | None = None,
     cwd: str | None = None,
+    image: ImageConfig | None = None,
 ) -> Runner:
     """Build the live runner for one ref on the backend it was placed on.
 
@@ -160,4 +168,4 @@ def build_runner(
             f"a {backend.kind.value} backend ({backend.name!r}) cannot run a "
             f"{config.runner.value} ref"
         )
-    return build(config, backend, signature=signature, cwd=cwd)
+    return build(config, backend, signature=signature, cwd=cwd, image=image)

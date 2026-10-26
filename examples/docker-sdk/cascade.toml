@@ -1,0 +1,5 @@
+[project]
+name = "docker-sdk"
+pipeline = "pipeline.yaml"
+deployment = "deployment.yaml"
+description = "An image built from refs/, with the cascade SDK inside: not wrapped."

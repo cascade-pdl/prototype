@@ -66,6 +66,12 @@ class RefSubprocess(RefData):
 class RefDocker(RefData):
     """An image, and optionally the command to run in it.
 
+    The image is either named (``image``, used exactly as written: a third-party image
+    stays what its publisher says it is) or built by cascade from a directory holding a
+    Dockerfile (``build``, relative to the pipeline's directory). Compile records the
+    directory's content hash in ``build_hash``; the image's name is derived from the two
+    (``cascade.substrate.naming``), so it changes exactly when the directory does.
+
     ``command`` replaces the image's default command (Docker's ``CMD``, ECS's ``command``
     override) and keeps its entrypoint; absent, the image runs as published.
 
@@ -77,27 +83,41 @@ class RefDocker(RefData):
     """
 
     kind: ClassVar[RunnerKind] = RunnerKind.docker
-    image: str
+    image: str | None = None
     extra_args: list[str] = field(default_factory=list)
     command: list[str] | None = None
     wrap: bool = True
+    build: str | None = None
+    build_hash: str | None = None
 
     @classmethod
     def decode(cls, raw: dict[str, Any]) -> Self:
-        _reject_unknown("docker", raw, {"image", "extra_args", "command", "wrap"})
-        if not isinstance(raw.get("image"), str) or not raw["image"]:
-            raise ValueError("docker config: `image` must be a non-empty string")
+        _reject_unknown(
+            "docker", raw, {"image", "build", "build_hash", "extra_args", "command", "wrap"}
+        )
+        image, build = raw.get("image"), raw.get("build")
+        if (image is None) == (build is None):
+            raise ValueError(
+                "docker config: give exactly one of `image` (an existing image) or "
+                "`build` (a directory with a Dockerfile)"
+            )
+        for name, value in (("image", image), ("build", build)):
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"docker config: `{name}` must be a non-empty string")
         command = raw.get("command")
         return cls(
-            image=raw["image"],
+            image=image,
+            build=build,
+            build_hash=raw.get("build_hash"),
             extra_args=raw.get("extra_args", []),
             command=None if command is None else _command("docker", "command", command),
             wrap=_flag(raw, "wrap"),
         )
 
     def encode(self) -> dict[str, Any]:
+        built = {"build": self.build, "build_hash": self.build_hash} if self.build else {}
         return {
-            "image": self.image,
+            **({"image": self.image} if self.image is not None else built),
             "extra_args": list(self.extra_args),
             "command": None if self.command is None else list(self.command),
             "wrap": self.wrap,

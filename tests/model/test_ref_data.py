@@ -36,9 +36,17 @@ def test_a_misspelt_setting_is_refused_not_dropped():
         RefDocker.decode({"image": "x:1", "wrapp": False})
 
 
-def test_a_docker_ref_needs_an_image():
-    with pytest.raises(ValueError, match="`image` must be a non-empty string"):
-        RefDocker.decode({"command": ["tool"]})
+@pytest.mark.parametrize("config", [{"command": ["tool"]}, {"image": "x:1", "build": "refs/x/"}])
+def test_a_docker_ref_names_or_builds_its_image_never_both(config):
+    with pytest.raises(ValueError, match="exactly one of `image`"):
+        RefDocker.decode(config)
+
+
+def test_a_built_ref_round_trips_with_its_hash():
+    ref = RefDocker.decode({"build": "refs/numbers/", "build_hash": "ab12", "wrap": False})
+    assert (ref.image, ref.build, ref.build_hash) == (None, "refs/numbers/", "ab12")
+    assert "image" not in ref.encode()
+    assert RefDocker.decode(ref.encode()) == ref
 
 
 def test_a_subprocess_ref_is_wrapped_unless_told_otherwise():

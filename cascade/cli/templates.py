@@ -38,6 +38,7 @@ refs: []
 #    runner: docker          # docker | subprocess | echo
 #    config:
 #      image: "my-registry/detect:v1"   # any image: it needs no cascade inside
+#      # build: refs/detect/   # instead of image: cascade builds refs/detect/Dockerfile
 #      command: ["detect", "--in", "/cascade/inputs/image", "--out", "/cascade/outputs/dets"]
 #      # wrap: false         # only for an image with the cascade SDK inside
 #    resources: { cpu: 1, memory: 2GiB }   # required on docker/subprocess; vCPU, unit on memory

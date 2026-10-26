@@ -66,6 +66,21 @@ them).
 - `mock`: host scripts written against the node SDK (`subprocess`, `wrap: false`).
 - `docker-raw`: a stock `python:3.13-slim` image with no cascade inside, wrapped by the
   bundle (`bundle/build.sh` first).
+- `docker-sdk`: an image cascade builds from `refs/numbers/`, with the SDK installed from
+  this checkout and an `entrypoint.py`; not wrapped.
+- `docker-built-wrapped`: an image cascade builds from `refs/jq/` (Alpine + `jq`, no
+  cascade), wrapped by the bundle.
+
+## Images cascade builds
+
+A docker ref names an existing image (`image:`) or a directory with a Dockerfile
+(`build: refs/<name>/`, relative to the pipeline). Compile hashes the directory, and the
+image is named `cascade/<dir>:<hash>`: it is built when that name does not exist yet
+(`cascade run` does it before starting, `cascade build` on its own), and a changed
+directory is a new name. No lock file. A Dockerfile that installs cascade copies it from
+the named build context `cascade` (`COPY --from=cascade . /src/cascade`), which cascade
+fills from this checkout; cascade's source then counts towards the hash. Pin `FROM`
+images by digest: a moving tag can change under the same hash.
 
 ## Not yet built (deliberate)
 

@@ -56,7 +56,8 @@ def _imports() -> dict[str, set[str]]:
     edges: dict[str, set[str]] = {}
     root = _source_root()
     for path in root.rglob("*.py"):
-        if "__pycache__" in str(path):
+        # an editor's lock file (`.#name.py`) is a dangling symlink, not source
+        if "__pycache__" in str(path) or not path.is_file():
             continue
         # `.parts`, not a string replace: the separator is `\\` on Windows, so replacing
         # "/" leaves the path untouched and every module looks like its own package

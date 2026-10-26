@@ -39,6 +39,7 @@ from cascade.protocol.binding import INPUTS_SCOPE, InputBinding, InputBindings
 from cascade.protocol.instance_path import InstancePath
 from cascade.protocol.run_spec import RunSpec
 from cascade.runners.build import RefRunnerBuilder, configure_ref_builder
+from cascade.runners.images import ImageBuildError, prepare_images, resolve_images
 from cascade.engine.dag import DagRunner
 from cascade.executor.placement import place
 from cascade.substrate.backends import uncapped_local
@@ -48,6 +49,7 @@ from cascade.substrate.placement import PlacementError
 RUN_INPUTS = INPUTS_SCOPE
 PLAN_KEY = "plan"
 PLACEMENT_KEY = "placement"
+IMAGES_KEY = "images"
 
 
 class ExecutorError(Exception):
@@ -113,6 +115,8 @@ class Executor:
             raise ExecutorError("an executor needs either a deployment or a store")
         self.plan = plan
         self.deployment = deployment
+        self.cwd = cwd
+        self._backends = deployment.backends if deployment else [uncapped_local()]
         self._base = store if store is not None else _live(deployment.store)
         try:
             self.placements = place(plan, deployment)
@@ -121,12 +125,9 @@ class Executor:
                 "cannot place this run:\n" + "\n".join(f"  - {m}" for m in e.errors)
             )
         # the executor is where a deployment becomes the pieces the engine needs: a live
-        # store, and a builder bound to the placement and the backends it names
-        self.build_ref = build_ref or configure_ref_builder(
-            placements=self.placements,
-            backends=deployment.backends if deployment else [uncapped_local()],
-            cwd=cwd,
-        )
+        # store, and a builder bound to the placement and the backends it names. The
+        # builder is made per run (``_builder``), once the run's images are resolved.
+        self._build_ref = build_ref
 
     # ------------------------------------------------------------------ inputs
     def _declared_inputs(self) -> dict[str, Any]:
@@ -175,6 +176,18 @@ class Executor:
         inputs: Mapping[str, Any] | None = None,
         run_id: str | None = None,
     ) -> RunResult:
+        # images are built and resolved first, once for the whole run: a Dockerfile that
+        # does not build, or an image that is missing, fails before any task starts, and
+        # no instance asks Docker anything before it runs
+        try:
+            await prepare_images(self.plan, self.placements, self._backends, self.cwd)
+            images = await resolve_images(self.plan, self.placements, self._backends)
+        except ImageBuildError as e:
+            raise ExecutorError(str(e))
+        build_ref = self._build_ref or configure_ref_builder(
+            placements=self.placements, backends=self._backends, cwd=self.cwd, images=images
+        )
+
         run_id = run_id or new_run_id()
         dag = self.plan.entrypoint
         path = InstancePath.root(run_id).child(dag)
@@ -185,10 +198,14 @@ class Executor:
         # a completed run is self-describing: the graph sits beside the data
         run_store.put_json(PLAN_KEY, self.plan.encode())
         run_store.put_json(PLACEMENT_KEY, self.placements.encode())
+        # which image each docker ref actually ran: a tag can move, an id cannot
+        run_store.put_json(
+            IMAGES_KEY, {ref: {"id": image.id} for ref, image in sorted(images.items())}
+        )
 
         bindings = self._stage_inputs(dag_store, inputs or {})
 
-        runner = DagRunner(dag, self.plan, self.build_ref)
+        runner = DagRunner(dag, self.plan, build_ref)
         code = await runner.run(
             RunSpec(
                 name=dag,

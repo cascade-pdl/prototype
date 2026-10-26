@@ -74,3 +74,23 @@ def run(dest: Path, capsys, run_id: str) -> dict:
 def test_docker_raw_runs_stock_images_wrapped_by_the_bundle(tmp_path, monkeypatch, capsys):
     dest = project("docker-raw", tmp_path, monkeypatch)
     assert run(dest, capsys, "t1") == {"result": [1, 2, 3, 4, 5]}
+    # the run records the image each ref actually ran, by id
+    record = FileStore(FileConfig(root=str(dest / "_store"), scope=("docker-raw", "t1")))
+    images = record.get_json("images")
+    assert set(images) == {"gen", "add-one"}
+    assert images["gen"]["id"].startswith("sha256:")
+
+
+@needs_docker
+def test_docker_sdk_builds_an_image_with_cascade_inside_and_runs_it_unwrapped(
+    tmp_path, monkeypatch, capsys
+):
+    dest = project("docker-sdk", tmp_path, monkeypatch)
+    assert run(dest, capsys, "t1") == {"result": [1, 2, 3, 4, 5]}
+
+
+@needs_docker
+@needs_bundle
+def test_docker_built_wrapped_builds_a_tool_image_and_wraps_it(tmp_path, monkeypatch, capsys):
+    dest = project("docker-built-wrapped", tmp_path, monkeypatch)
+    assert run(dest, capsys, "t1") == {"result": [1, 2, 3, 4, 5]}

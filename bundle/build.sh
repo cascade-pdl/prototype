@@ -18,6 +18,7 @@
 #
 # Needs: docker, poetry, curl, sha256sum, strip and readelf (binutils). x86_64 only for now.
 set -euo pipefail
+trap 'echo "build.sh: failed at line $LINENO; the previous bundle, if any, is untouched" >&2' ERR
 
 PBS_TAG=20261021
 PY_VERSION=3.13.17
@@ -40,8 +41,9 @@ VERSION="$(poetry -C "$REPO" version -s)"
 ARCHIVE="$OUT/cascade-bundle-${VERSION}-x86_64.tar.gz"
 
 mkdir -p "$CACHE"
-# files written by containers below are chowned back, but clear any root-owned leftovers
-docker run --rm -v "$OUT:/out" "$ALPINE" rm -rf /out/work /out/opt-cascade
+# files written by containers below are chowned back, but clear any root-owned leftovers.
+# The previous bundle stays in place until a new one is complete (step 7).
+docker run --rm -v "$OUT:/out" "$ALPINE" rm -rf /out/work
 mkdir -p "$WORK"
 
 # 1. the interpreter, verified against the release's published checksum
@@ -57,8 +59,16 @@ mv "$WORK/python" "$ROOT"
 # 2. cascade and its dependencies, at the versions in poetry.lock, as musllinux wheels.
 #    Installed from this host with --target/--platform: the bundle's interpreter cannot
 #    run here until its loader is patched in.
-rm -rf "$CACHE/dist"
-(cd "$REPO" && poetry build -q -f wheel -o "$CACHE/dist")
+#    The wheel is built from a clean copy of the package: editor files in the working
+#    tree (Emacs `.#name` lock links, `#name#` auto-saves, `name~` backups) would
+#    otherwise break the build or ship in the wheel.
+rm -rf "$CACHE/dist" "$CACHE/source"
+mkdir -p "$CACHE/source"
+cp "$REPO/pyproject.toml" "$REPO/README.md" "$CACHE/source/"
+(cd "$REPO" && find cascade -type f ! -name '.#*' ! -name '#*#' ! -name '*~' \
+   ! -name '*.pyc' ! -path '*/__pycache__/*' \
+   -exec cp --parents {} "$CACHE/source/" \;)
+(cd "$CACHE/source" && poetry build -f wheel -o "$CACHE/dist" >/dev/null)   # errors still show
 poetry -C "$REPO" show --only main | awk '{print $1 "==" $2}' > "$CACHE/constraints.txt"
 poetry -C "$REPO" run pip install --quiet --disable-pip-version-check --no-compile \
   --target "$SITE" --python-version 3.13 --implementation cp --only-binary=:all: \
@@ -110,7 +120,9 @@ strip --strip-debug "$ROOT/bin/python3.13"
 docker run --rm --network none -v "$ROOT:/opt/cascade:ro" --entrypoint /opt/cascade/bin/cascade \
   "$ALPINE" node wrap --help >/dev/null
 
-# 7. publish: the unpacked tree and a reproducible archive of it
+# 7. publish: the unpacked tree and a reproducible archive of it, replacing the previous
+#    bundle only now that the new one is complete
+rm -rf "$OUT/opt-cascade"
 mv "$ROOT" "$OUT/opt-cascade"
 rmdir "$WORK"
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C "$OUT" -cf - opt-cascade \

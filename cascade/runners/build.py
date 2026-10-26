@@ -3,8 +3,8 @@
 Two stages, because two different things vary at two different times:
 
 - **run-wide settings** are fixed for a whole run: where each ref was placed, the backends
-  it was placed on, and where a relative command resolves. Bound once, by
-  ``configure_ref_builder``.
+  it was placed on, where a relative command resolves, and each docker ref's image as
+  resolved for the run. Bound once, by ``configure_ref_builder``.
 - **ref data** varies per node: the ref's name, its own config and its resolved ports.
   Passed at call time.
 
@@ -31,12 +31,13 @@ own recursion and asks this only for refs.
 """
 from __future__ import annotations
 
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 from cascade.model.runner_kinds import RunnerKind
 from cascade.plan.run_config import RunConfig
 from cascade.plan.signature import Signature
 from cascade.protocol.runner import Runner
+from cascade.runners.docker import ImageConfig
 from cascade.runners.registry import build_runner
 from cascade.substrate.backends import Backend
 from cascade.substrate.placement import PlacementError, PlacementMap
@@ -54,6 +55,7 @@ def build_ref(
     placements: PlacementMap | None = None,
     backends: Sequence[Backend] = (),
     cwd: str | None = None,
+    images: Mapping[str, ImageConfig] | None = None,
 ) -> Runner:
     """Build one ref's runner on the backend it was placed on.
 
@@ -68,13 +70,15 @@ def build_ref(
     backend = next((b for b in backends if b.name == placed), None)
     if backend is None:
         raise PlacementError([f"ref {name!r} is placed on unknown backend {placed!r}"])
-    return build_runner(config, backend, signature=signature, cwd=cwd)
+    image = (images or {}).get(name)
+    return build_runner(config, backend, signature=signature, cwd=cwd, image=image)
 
 
 def configure_ref_builder(
     placements: PlacementMap | None = None,
     backends: Sequence[Backend] = (),
     cwd: str | None = None,
+    images: Mapping[str, ImageConfig] | None = None,
 ) -> RefRunnerBuilder:
     """Bind the run-wide half, leaving a function of ref data alone.
 
@@ -84,10 +88,12 @@ def configure_ref_builder(
     deployment under a second name and mislabelled invocation context as configuration.
     """
     bound_backends = tuple(backends)
+    bound_images = dict(images or {})
 
     def builder(name: str, config: RunConfig, signature: Signature | None = None) -> Runner:
         return build_ref(
-            name, config, signature, placements=placements, backends=bound_backends, cwd=cwd
+            name, config, signature, placements=placements, backends=bound_backends,
+            cwd=cwd, images=bound_images,
         )
 
     return builder

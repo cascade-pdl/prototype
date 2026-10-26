@@ -1,0 +1,5 @@
+[project]
+name = "docker-built-wrapped"
+pipeline = "pipeline.yaml"
+deployment = "deployment.yaml"
+description = "An image built from refs/ with a tool and no cascade inside: wrapped."

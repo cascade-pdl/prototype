@@ -95,6 +95,12 @@ async def inspect_image(image: str, pull: bool) -> ImageConfig:
     )
 
 
+async def image_exists(image: str) -> bool:
+    """Whether ``image`` is present locally."""
+    code, _, _ = await _docker("image", "inspect", image)
+    return code == 0
+
+
 async def _docker(*argv: str) -> tuple[int, bytes, bytes]:
     proc = await asyncio.create_subprocess_exec(
         "docker", *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -134,6 +140,7 @@ class RunnerDocker(Runner):
         gpu: int = 0,
         command: list[str] | None = None,
         bundle: str | None = None,
+        resolved: ImageConfig | None = None,
     ):
         """``memory`` in MiB, ``cpu`` in vCPU, ``gpu`` a count: the ref's resources,
         which on docker are the allocation as well as the minimum."""
@@ -147,12 +154,15 @@ class RunnerDocker(Runner):
         self.gpu = gpu
         self.command = command
         self.bundle = bundle
+        self.resolved = resolved
+        """The image as resolved once for the run; runs use its id and ask Docker
+        nothing first. Without it, a wrapped run inspects the image at every spawn."""
 
     def _build_cmd(
         self, spec: RunSpec, name: str | None = None, image: ImageConfig | None = None
     ) -> list[str]:
-        """The ``docker run`` command line. ``image`` is the inspected image, needed when
-        wrapping (and only then)."""
+        """The ``docker run`` command line. ``image`` is the inspected image: needed when
+        wrapping, and when given the container runs it by id."""
         if self.bundle is not None and image is None:
             raise ValueError("a wrapped run needs the inspected image")
         cmd = ["docker", "run", "--rm"]
@@ -199,7 +209,7 @@ class RunnerDocker(Runner):
 
         if self.bundle is None:
             cmd += self.extra_args
-            cmd.append(self.image)
+            cmd.append(image.id if image is not None else self.image)
             return cmd + list(self.command or ())
 
         tool = [*image.entrypoint, *(self.command or image.cmd)]
@@ -219,11 +229,9 @@ class RunnerDocker(Runner):
 
     async def spawn(self, spec: RunSpec) -> HandleDocker:
         name = container_name(spec)
-        image = (
-            await inspect_image(self.image, pull=not self.no_pull)
-            if self.bundle is not None
-            else None
-        )
+        image = self.resolved
+        if image is None and self.bundle is not None:
+            image = await inspect_image(self.image, pull=not self.no_pull)
         return HandleDocker(
             process=await asyncio.create_subprocess_exec(
                 *self._build_cmd(spec=spec, name=name, image=image),

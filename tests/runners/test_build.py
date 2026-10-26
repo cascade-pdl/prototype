@@ -67,14 +67,14 @@ def test_the_builder_turns_ref_data_into_a_runner(plan):
 
 
 def test_the_builder_never_sees_a_plan_or_a_deployment(plan):
-    """Two stages: placement and backends bound once, ref data passed per call. The name
-    is ref data: it is the key into the placement the executor already decided, so the
-    builder reads a decision rather than making one."""
+    """Two stages: placement, backends and the run's resolved images bound once, ref data
+    passed per call. The name is ref data: it is the key into the placement the executor
+    already decided, so the builder reads a decision rather than making one."""
     assert list(inspect.signature(configure_ref_builder).parameters) == [
-        "placements", "backends", "cwd"
+        "placements", "backends", "cwd", "images"
     ]
     assert list(inspect.signature(build_ref).parameters) == [
-        "name", "config", "signature", "placements", "backends", "cwd"
+        "name", "config", "signature", "placements", "backends", "cwd", "images"
     ]
 
 

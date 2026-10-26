@@ -284,3 +284,15 @@ def test_the_command_reaches_the_docker_runner():
 def test_a_subprocess_ref_says_whether_it_is_wrapped():
     assert build_runner(RunConfig(config=RefSubprocess(cmd=["t"]))).wrap is True
     assert build_runner(RunConfig(config=RefSubprocess(cmd=["t"], wrap=False))).wrap is False
+
+
+def test_a_built_ref_runs_the_image_named_by_its_hash_and_never_pulls_it():
+    ref = RefDocker(build="refs/numbers/", build_hash="0123456789abcdef" * 4, wrap=False)
+    runner = build_runner(RunConfig(config=ref), _local(no_pull=False))
+    assert runner.image == "cascade/numbers:0123456789abcdef"
+    assert runner.no_pull is True  # built here, before the run: nowhere to pull from
+
+
+def test_a_built_ref_without_its_hash_was_not_compiled():
+    with pytest.raises(ValueError, match="no build hash"):
+        build_runner(RunConfig(config=RefDocker(build="refs/x/", wrap=False)))

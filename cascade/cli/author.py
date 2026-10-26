@@ -37,7 +37,7 @@ def _load_plan(path: str) -> Plan:
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    errors = check(_load_pipeline(args.pipeline))
+    errors = check(_load_pipeline(args.pipeline), base=Path(args.pipeline).parent)
     if errors:
         print(f"invalid ({len(errors)} error(s)):")
         for e in errors:
@@ -50,7 +50,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 def cmd_compile(args: argparse.Namespace) -> int:
     pipeline = _load_pipeline(args.pipeline)
     try:
-        plan = compile_pipeline(pipeline)
+        plan = compile_pipeline(pipeline, base=Path(args.pipeline).parent)
     except CompileError as e:
         raise CliError(str(e))
     src = Path(args.pipeline)

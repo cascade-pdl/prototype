@@ -1,0 +1,15 @@
+# This machine: a file store beside the project, docker on the local backend. No bundle:
+# these refs carry cascade inside their image.
+name: local
+
+store:
+  kind: file
+  config:
+    root: ./_store
+    scope: [docker-sdk]
+
+backends:
+  - name: local
+    kind: local
+    max: { cpu: 4, memory: 8GiB }
+    concurrency: 4

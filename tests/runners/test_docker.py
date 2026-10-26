@@ -172,3 +172,33 @@ async def test_a_missing_image_is_pulled_when_allowed(fake_docker):
     config = await inspect_image("t:1", pull=True)
     assert (fake_docker / "pulled").read_text().split() == ["t:1"]
     assert config.id == "sha256:abc"
+
+
+# --- an image resolved once for the run --------------------------------------
+
+@pytest.mark.asyncio
+async def test_a_resolved_image_means_no_docker_call_before_the_run(monkeypatch):
+    """A fan of a thousand lanes must not inspect the image a thousand times."""
+    import cascade.runners.docker as docker_module
+
+    async def no_inspect(*a, **k):
+        raise AssertionError("inspected per spawn")
+
+    started = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def record(*argv, **kwargs):
+        started.append(argv)
+        return await real_exec("true")
+
+    monkeypatch.setattr(docker_module, "inspect_image", no_inspect)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", record)
+    handle = await RunnerDocker(image="tool:1", bundle="/b", resolved=IMAGE).spawn(SPEC)
+    await handle.await_done()
+    [argv] = started
+    assert "sha256:abc" in argv and "tool:1" not in argv
+
+
+def test_an_unwrapped_resolved_image_runs_by_id_too():
+    cmd = RunnerDocker(image="mine:1", resolved=IMAGE)._build_cmd(SPEC, name="c", image=IMAGE)
+    assert cmd[-1] == "sha256:abc"

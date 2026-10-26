@@ -1,0 +1,39 @@
+# Both refs run one image, built by cascade from refs/numbers/: Python with the cascade
+# SDK installed and an entrypoint.py that talks to the store itself. So each ref says
+# `wrap: false` (no bundle needed), and `command` tells the entrypoint which job to do.
+#
+#   gen      writes five numbers
+#   add-one  is scattered over them: one container per number
+#
+# Run it from this directory:  cascade run pipeline.yaml
+# (the image is built on the first run, and again whenever refs/numbers/ changes)
+entrypoint: main
+
+input: []
+
+refs:
+  - name: gen
+    runner: docker
+    resources: { cpu: 0.25, memory: 256MiB }
+    config: { build: refs/numbers/, command: ["gen"], wrap: false }
+    input: []
+    output: [ { name: numbers, type: "int[]" } ]
+
+  - name: add-one
+    runner: docker
+    resources: { cpu: 0.25, memory: 256MiB }
+    config: { build: refs/numbers/, command: ["add-one"], wrap: false }
+    input:  [ { name: n, type: int } ]
+    output: [ { name: m, type: int } ]
+
+dags:
+  - name: main
+    input: []
+    nodes:
+      - name: gen
+        runs: gen
+      - name: add
+        runs: add-one
+        scatter: n
+        depends_on: [ { node: gen, field: numbers, as: n } ]
+    output: [ { node: add, field: m, as: result } ]

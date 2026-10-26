@@ -1,0 +1,42 @@
+# Both refs run an image cascade builds from refs/jq/: Alpine plus `jq`, and no cascade.
+# They are wrapped (the default), so the bundle stages inputs under /cascade/inputs and
+# collects /cascade/outputs around each command.
+#
+#   gen      writes five numbers
+#   add-one  is scattered over them: one container per number
+#
+# Run it (after bundle/build.sh, from this directory):  cascade run pipeline.yaml
+entrypoint: main
+
+input: []
+
+refs:
+  - name: gen
+    runner: docker
+    resources: { cpu: 0.25, memory: 256MiB }
+    config:
+      build: refs/jq/
+      command: ["sh", "-c", "jq -n '[range(5)]' > /cascade/outputs/numbers"]
+    input: []
+    output: [ { name: numbers, type: "int[]" } ]
+
+  - name: add-one
+    runner: docker
+    resources: { cpu: 0.25, memory: 256MiB }
+    config:
+      build: refs/jq/
+      command: ["sh", "-c", "jq '. + 1' /cascade/inputs/n > /cascade/outputs/m"]
+    input:  [ { name: n, type: int } ]
+    output: [ { name: m, type: int } ]
+
+dags:
+  - name: main
+    input: []
+    nodes:
+      - name: gen
+        runs: gen
+      - name: add
+        runs: add-one
+        scatter: n
+        depends_on: [ { node: gen, field: numbers, as: n } ]
+    output: [ { node: add, field: m, as: result } ]
