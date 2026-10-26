@@ -9,7 +9,8 @@ import pytest
 
 import os
 
-from cascade.protocol.run_spec import RunSpec
+from cascade.protocol.run_spec import SPEC_BUDGET, RunSpec, SpecTooLarge
+from cascade.store.file_store import FileConfig, FileStore
 from cascade.runners.docker import (
     DockerImageError,
     HandleDocker,
@@ -202,3 +203,34 @@ async def test_a_resolved_image_means_no_docker_call_before_the_run(monkeypatch)
 def test_an_unwrapped_resolved_image_runs_by_id_too():
     cmd = RunnerDocker(image="mine:1", resolved=IMAGE)._build_cmd(SPEC, name="c", image=IMAGE)
     assert cmd[-1] == "sha256:abc"
+
+
+# --- the spec budget -----------------------------------------------------------
+
+def test_the_launch_is_exactly_what_the_command_line_passes(tmp_path):
+    """The budget is checked on ``launch_for``, so it must be what ``docker run`` gets:
+    the container's env (store rerooted, HOME for credentials) and the command after
+    the image."""
+    store = FileStore(FileConfig(root=str(tmp_path / "s"), scope=("r", "n")))
+    spec = RunSpec(name="n", run_id="r", store_out=store, args={"k": 1})
+    runner = RunnerDocker(
+        image="tool:1", bundle="/b", resolved=IMAGE, aws_credentials_dir=str(tmp_path)
+    )
+    launch = runner.launch_for(spec)
+    cmd = runner._build_cmd(spec, name="c", image=IMAGE)
+
+    passed = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-e"]
+    assert passed == [f"{k}={v}" for k, v in launch.env.items()]
+    assert '"/cascade/store"' in launch.env["CASCADE_STORE_OUT"]
+    assert "HOME" in launch.env
+    assert cmd[cmd.index("sha256:abc") + 1:] == list(launch.command)
+
+
+def test_a_wrapped_launch_is_unknown_until_the_image_is_resolved():
+    assert RunnerDocker(image="tool:1", bundle="/b").launch_for(SPEC) is None
+
+
+def test_a_launch_over_the_budget_is_refused():
+    spec = RunSpec(name="n", run_id="r", instance_id="r/main/n", args={"blob": "x" * SPEC_BUDGET})
+    with pytest.raises(SpecTooLarge, match="^r/main/n: .*CASCADE_ARGS"):
+        RunnerDocker(image="tool:1")._build_cmd(spec, name="c")

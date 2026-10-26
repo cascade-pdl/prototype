@@ -17,6 +17,7 @@ from cascade.executor import (
     execute,
     new_run_id,
 )
+from cascade.protocol.run_spec import SPEC_BUDGET
 from cascade.store.file_store import FileConfig, FileStore
 
 
@@ -182,3 +183,39 @@ async def test_fetching_an_undeclared_port_is_an_error(plan, store):
     result = await Executor(plan, store=store).run(inputs={"src": "x"})
     with pytest.raises(ExecutorError, match="no output port"):
         result.fetch("nope")
+
+# --- the spec budget -----------------------------------------------------------
+
+HUGE_ARGS = """
+entrypoint: main
+input: [ { name: src, type: string } ]
+refs:
+  - name: tool
+    runner: subprocess
+    config: { cmd: ["false"], wrap: false }
+    resources: { cpu: 0.5, memory: 256MiB }
+    input:  [ { name: src, type: string } ]
+    output: [ { name: out, type: string } ]
+dags:
+  - name: main
+    input: [ { name: src, type: string } ]
+    nodes:
+      - name: small
+        runs: tool
+        depends_on: [ { node: "$input", field: src, as: src } ]
+      - name: big
+        runs: tool
+        args: { table: "%s" }
+        depends_on: [ { node: "$input", field: src, as: src } ]
+    output: [ { node: small, field: out, as: out } ]
+"""
+
+
+@pytest.mark.asyncio
+async def test_a_spec_over_the_budget_is_refused_before_anything_runs(store, tmp_path):
+    plan = compile_pipeline(Pipeline.decode(safe_load(HUGE_ARGS % ("x" * SPEC_BUDGET))))
+    with pytest.raises(ExecutorError, match="run spec too large") as e:
+        await Executor(plan, store=store).run(inputs={"src": "a"}, run_id="r1")
+    assert "node 'big' (ref 'tool')" in str(e.value)
+    assert "'small'" not in str(e.value)
+    assert not (tmp_path / "wilder" / "r1").exists()  # nothing written, nothing started

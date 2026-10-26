@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
+from typing import Iterator
 
 from cascade.protocol.handle import Handle
 from cascade.protocol.run_status import RunStatus
-from cascade.protocol.run_spec import RunSpec
+from cascade.protocol.run_spec import Launch, RunSpec
 
 
 class Runner(ABC):
@@ -27,6 +28,20 @@ class Runner(ABC):
     @abstractmethod
     async def spawn(self, spec: RunSpec) -> Handle:
         """Start the work and return a Handle."""
+
+    def launch_for(self, spec: RunSpec) -> Launch | None:
+        """The env and command a launch of ``spec`` would pass, or ``None`` when nothing
+        crosses a process boundary (in-process runners, coordinators) or it cannot be
+        known before spawning."""
+        return None
+
+    def leaves(self, spec: RunSpec) -> Iterator[tuple["Runner", RunSpec]]:
+        """The runners and specs that running ``spec`` would launch, without running.
+
+        A leaf runner is its own only leaf. Coordinators override this to walk what they
+        would dispatch, so a whole run can be checked before anything starts.
+        """
+        yield self, spec
 
     async def run(self, spec: RunSpec) -> int:
         """Spawn, then wait for the handle to stop; return its exit code."""

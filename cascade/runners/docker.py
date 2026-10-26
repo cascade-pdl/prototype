@@ -9,7 +9,7 @@ from cascade.protocol.bundle import BUNDLE_ENTRYPOINT, BUNDLE_ROOT, STAGING_ROOT
 from cascade.protocol.runner import Runner
 from cascade.protocol.run_status import RunStatus
 from cascade.runners.process import HandleSubprocess
-from cascade.protocol.run_spec import RunSpec, to_env
+from cascade.protocol.run_spec import Launch, RunSpec, check_launch, to_env
 from cascade.store.base import Store
 from cascade.store.file_store import FileConfig
 from cascade.store.registry import from_config
@@ -158,13 +158,48 @@ class RunnerDocker(Runner):
         """The image as resolved once for the run; runs use its id and ask Docker
         nothing first. Without it, a wrapped run inspects the image at every spawn."""
 
+    def _home(self) -> str:
+        return "/tmp" if self.map_current_user and hasattr(os, "getuid") else "/root"
+
+    def launch_for(self, spec: RunSpec, image: ImageConfig | None = None) -> Launch | None:
+        """The container's env and what follows the image on the command line.
+
+        ``image`` defaults to the one resolved for the run. Unknown (``None``) for a
+        wrapped run whose image is not resolved yet: the command comes from the image.
+        """
+        image = image or self.resolved
+        # a host file store is mounted at a fixed path, so the container is told that one
+        if _file_store_roots(spec):
+            spec = _rerooted(spec, CONTAINER_STORE_ROOT)
+        env = to_env(spec=spec)
+        if self.aws_credentials_dir:
+            # HOME is set *only* here, and only because boto looks for ~/.aws. Forcing it
+            # otherwise breaks any image that pip-installed as its own user: the packages
+            # sit in that user's ~/.local, and a different HOME hides them.
+            env["HOME"] = self._home()
+
+        if self.bundle is None:
+            return Launch(env=env, command=list(self.command or ()))
+        if image is None:
+            return None
+        tool = [*image.entrypoint, *(self.command or image.cmd)]
+        if not tool:
+            raise DockerImageError(
+                f"image {self.image!r} has no entrypoint and no default command, and the "
+                "ref gives no `command`: there is nothing to run"
+            )
+        return Launch(env=env, command=wrap_args(tool))
+
     def _build_cmd(
         self, spec: RunSpec, name: str | None = None, image: ImageConfig | None = None
     ) -> list[str]:
         """The ``docker run`` command line. ``image`` is the inspected image: needed when
-        wrapping, and when given the container runs it by id."""
+        wrapping, and when given the container runs it by id. Refused if its env and
+        command are over the spec budget."""
         if self.bundle is not None and image is None:
             raise ValueError("a wrapped run needs the inspected image")
+        launch = self.launch_for(spec, image)
+        check_launch(launch, who=spec.instance_id or spec.name)
         cmd = ["docker", "run", "--rm"]
         if name is not None:
             cmd += ["--name", name]
@@ -182,18 +217,10 @@ class RunnerDocker(Runner):
             # construction, so make it here, as whoever runs the executor.
             os.makedirs(host_roots[0], exist_ok=True)
             cmd += ["-v", f"{host_roots[0]}:{CONTAINER_STORE_ROOT}"]
-            spec = _rerooted(spec, CONTAINER_STORE_ROOT)
-
-        env = to_env(spec=spec)
 
         if self.aws_credentials_dir:
-            # HOME is set *only* here, and only because boto looks for ~/.aws. Forcing it
-            # otherwise breaks any image that pip-installed as its own user: the packages
-            # sit in that user's ~/.local, and a different HOME hides them.
-            home = "/tmp" if self.map_current_user and hasattr(os, "getuid") else "/root"
             host_aws = os.path.abspath(os.path.expanduser(self.aws_credentials_dir))
-            cmd += ["-v", f"{host_aws}:{home}/.aws:ro"]
-            env["HOME"] = home
+            cmd += ["-v", f"{host_aws}:{self._home()}/.aws:ro"]
 
         # the ref's resources: hard caps, so a task that outgrows them fails here the
         # way it would on ECS
@@ -204,20 +231,14 @@ class RunnerDocker(Runner):
         if self.gpu:
             cmd += ["--gpus", str(self.gpu)]
 
-        for k, v in env.items():
+        for k, v in launch.env.items():
             cmd += ["-e", f"{k}={v}"]
 
         if self.bundle is None:
             cmd += self.extra_args
             cmd.append(image.id if image is not None else self.image)
-            return cmd + list(self.command or ())
+            return cmd + list(launch.command)
 
-        tool = [*image.entrypoint, *(self.command or image.cmd)]
-        if not tool:
-            raise DockerImageError(
-                f"image {self.image!r} has no entrypoint and no default command, and the "
-                "ref gives no `command`: there is nothing to run"
-            )
         cmd += [
             "--tmpfs", f"{STAGING_ROOT}:mode=1777",
             "-v", f"{self.bundle}:{BUNDLE_ROOT}:ro",
@@ -225,7 +246,7 @@ class RunnerDocker(Runner):
         ]
         cmd += self.extra_args
         cmd.append(image.id)
-        return cmd + wrap_args(tool)
+        return cmd + list(launch.command)
 
     async def spawn(self, spec: RunSpec) -> HandleDocker:
         name = container_name(spec)

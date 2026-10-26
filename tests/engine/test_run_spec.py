@@ -6,8 +6,17 @@ structural.
 """
 import json
 
+import pytest
+
 from cascade.types import TypeExpr
-from cascade.protocol.run_spec import RunSpec, to_env
+from cascade.protocol.run_spec import (
+    SPEC_BUDGET,
+    Launch,
+    RunSpec,
+    SpecTooLarge,
+    check_launch,
+    to_env,
+)
 from cascade.protocol.binding import InputBinding, InputBindings
 from cascade.store.file_store import FileStore, FileConfig
 from cascade.store.registry import decode as decode_store
@@ -84,3 +93,35 @@ def test_every_value_is_a_string(tmp_path):
         )
     )
     assert all(isinstance(v, str) for v in env.values())
+
+# --- the size budget ---------------------------------------------------------
+
+def test_a_launch_is_measured_as_an_ecs_container_override():
+    launch = Launch(env={"A": 'say "hi"'}, command=["node", "wrap", "--", "tool"])
+    expected = (
+        '{"environment":[{"name":"A","value":"say \\"hi\\""}],'
+        '"command":["node","wrap","--","tool"]}'
+    )
+    assert launch.size() == len(expected)
+
+
+def test_a_launch_within_the_budget_passes():
+    check_launch(Launch(env={"CASCADE_ARGS": "x" * (SPEC_BUDGET - 100)}), who="n")
+
+
+def test_large_args_are_refused_and_pointed_at_an_input_port():
+    launch = Launch(env={"CASCADE_ARGS": "x" * SPEC_BUDGET, "CASCADE_INPUTS": "[]"})
+    with pytest.raises(SpecTooLarge) as e:
+        check_launch(launch, who="node 'detect'")
+    message = str(e.value)
+    assert message.startswith("node 'detect': ")
+    assert "Largest: CASCADE_ARGS" in message
+    assert "input port" in message
+
+
+def test_the_input_port_hint_is_only_for_args():
+    launch = Launch(env={"CASCADE_ARGS": "{}"}, command=["x" * SPEC_BUDGET])
+    with pytest.raises(SpecTooLarge) as e:
+        check_launch(launch, who="n")
+    assert "Largest: command" in str(e.value)
+    assert "input port" not in str(e.value)

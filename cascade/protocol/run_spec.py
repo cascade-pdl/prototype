@@ -8,6 +8,14 @@ go — but the node cannot see the plan, so which ports exist still has to trave
 The env projection is the wire format for containers; an in-process runner reads the
 spec directly instead.
 
+**A size budget, not a pointer.** ECS accepts 8192 characters for *all* of a task's
+overrides, environment and command together, JSON included. Rather than move the spec
+into the store behind a pointer (the store config would still have to travel in env, and
+every instance would pay a write and a read), it stays in env and must fit
+``SPEC_BUDGET``, on every backend, so a local run refuses what ECS would. It grows with a
+node's ports and args, never with fan width: a gathered collection is one binding. What
+blows it in practice is a large arg, which is data and belongs in an input port.
+
 **Two stores, not one.** ``store_in`` is scoped to the parent dag, so an instance
 can read its siblings' outputs without anything being copied; ``store_out`` is
 scoped to the instance's own slot, so it cannot write outside it. That asymmetry is
@@ -17,7 +25,7 @@ read access to its dag.
 """
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Sequence
 
 from cascade.store.base import Store
 from cascade.store.registry import encode
@@ -60,3 +68,67 @@ def to_env(spec: RunSpec) -> dict[str, str]:
         }
     )
     return env
+
+SPEC_BUDGET = 6144
+"""The most a launch may pass as overrides: env and command, measured as ECS counts them.
+
+Below ECS's 8192 to leave room for the rest of a ``RunTask`` override (container name,
+sizes) and for whatever a backend adds of its own."""
+
+
+@dataclass(frozen=True)
+class Launch:
+    """What one launch passes on top of the image: its environment and its command.
+
+    The part of a launch that ECS limits, so the part the budget measures. A runner
+    reports it (``Runner.launch_for``) and launches with exactly it, so what is checked
+    before a run is what is passed during it.
+    """
+
+    env: dict[str, str]
+    command: Sequence[str] = ()
+
+    def parts(self) -> dict[str, int]:
+        """Each variable's and the command's share of ``size``."""
+        sizes = {
+            name: len(json.dumps({"name": name, "value": value}, separators=(",", ":")))
+            for name, value in self.env.items()
+        }
+        sizes["command"] = len(json.dumps(list(self.command), separators=(",", ":")))
+        return sizes
+
+    def size(self) -> int:
+        """Characters of ``{"environment": [{"name", "value"}...], "command": [...]}``,
+        the shape of an ECS container override."""
+        return len(
+            json.dumps(
+                {
+                    "environment": [{"name": k, "value": v} for k, v in self.env.items()],
+                    "command": list(self.command),
+                },
+                separators=(",", ":"),
+            )
+        )
+
+
+class SpecTooLarge(Exception):
+    """A launch's overrides do not fit ``SPEC_BUDGET``."""
+
+
+def check_launch(launch: Launch, who: str) -> None:
+    """Raise ``SpecTooLarge`` naming ``who`` and the largest parts if over budget."""
+    size = launch.size()
+    if size <= SPEC_BUDGET:
+        return
+    parts = sorted(launch.parts().items(), key=lambda p: p[1], reverse=True)
+    largest = ", ".join(f"{name} {n}" for name, n in parts[:3])
+    message = (
+        f"{who}: the run spec is {size} characters, over the budget of {SPEC_BUDGET} "
+        f"(ECS allows 8192 for all of a task's overrides). Largest: {largest}."
+    )
+    if parts[0][0] == "CASCADE_ARGS":
+        message += (
+            " Args are for small settings: pass a large value through an input port "
+            "instead."
+        )
+    raise SpecTooLarge(message)

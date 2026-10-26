@@ -10,7 +10,7 @@ from contextlib import suppress
 
 from cascade.protocol.bundle import wrap_args
 from cascade.protocol.runner import Runner
-from cascade.protocol.run_spec import RunSpec, to_env
+from cascade.protocol.run_spec import Launch, RunSpec, check_launch, to_env
 from cascade.protocol.coro import HandleCoro
 from cascade.protocol.run_status import RunStatus
 
@@ -67,13 +67,23 @@ class RunnerSubprocess(Runner):
         self.cwd = cwd
         self.wrap = wrap
 
+    def launch_for(self, spec: RunSpec) -> Launch:
+        """The protocol env and the command, as a container would get them: a host
+        process is held to the same budget, so moving the ref into an image changes
+        nothing. The inherited host env and the staging directory are not counted."""
+        return Launch(
+            env=to_env(spec), command=wrap_args(self.cmd) if self.wrap else list(self.cmd)
+        )
+
     async def spawn(self, spec: RunSpec):
-        env = {**os.environ, **to_env(spec)}
+        launch = self.launch_for(spec)
+        check_launch(launch, who=spec.instance_id or spec.name)
+        env = {**os.environ, **launch.env}
         argv, scratch = list(self.cmd), None
         if self.wrap:
             scratch = tempfile.mkdtemp(prefix="cascade-")
             env["CASCADE_ROOT"] = scratch
-            argv = [sys.executable, "-m", "cascade.cli", *wrap_args(self.cmd)]
+            argv = [sys.executable, "-m", "cascade.cli", *launch.command]
         try:
             process = await asyncio.create_subprocess_exec(*argv, cwd=self.cwd, env=env)
         except BaseException:

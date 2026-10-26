@@ -15,6 +15,8 @@ What it owns is everything that is true once per run rather than once per node:
 - **the run id** — sortable, so listing runs is chronological;
 - **the run's own inputs** — staged into ``<run>/<dag>/$in/`` and handed to the root dag
   as bindings, which is the convention the ``$input`` edges resolve against;
+- **the spec budget** — every launch the run would make is checked to fit it before
+  anything is written or started, so a node too big for ECS is refused up front;
 - **the placement** — which backend each ref runs on, decided once from the plan and
   the deployment before anything starts, and bound into the ref builder;
 - **the plan** — written into the run's scope, so a completed run is self-describing:
@@ -37,7 +39,8 @@ from cascade.store.registry import from_config
 
 from cascade.protocol.binding import INPUTS_SCOPE, InputBinding, InputBindings
 from cascade.protocol.instance_path import InstancePath
-from cascade.protocol.run_spec import RunSpec
+from cascade.protocol.run_spec import RunSpec, SpecTooLarge, check_launch
+from cascade.protocol.runner import Runner
 from cascade.runners.build import RefRunnerBuilder, configure_ref_builder
 from cascade.runners.images import ImageBuildError, prepare_images, resolve_images
 from cascade.engine.dag import DagRunner
@@ -136,8 +139,9 @@ class Executor:
             raise ExecutorError(f"no signature for entrypoint {self.plan.entrypoint!r}")
         return dict(signature.inputs)
 
-    def _stage_inputs(self, dag_store: Store, inputs: Mapping[str, Any]) -> InputBindings:
-        """Write the run's own inputs into ``$in/`` and bind them there.
+    def _bind_inputs(self, inputs: Mapping[str, Any]) -> InputBindings:
+        """The run's own inputs bound at ``$in/<port>``, where ``_stage_inputs`` writes
+        them.
 
         This is the one place the ``$input`` convention is defined; every ``$input``
         edge in the entrypoint dag resolves against it.
@@ -153,8 +157,6 @@ class Executor:
             raise ExecutorError(
                 f"unknown input(s) for {self.plan.entrypoint!r}: {sorted(unexpected)}"
             )
-        for port, value in inputs.items():
-            dag_store.put_json(port, value, at=(RUN_INPUTS,))
         # the entrypoint's own signature is right here, so a run input is bound with its
         # declared type and config rather than a placeholder
         return InputBindings(
@@ -169,6 +171,31 @@ class Executor:
                 for port in inputs
             )
         )
+
+    @staticmethod
+    def _stage_inputs(dag_store: Store, inputs: Mapping[str, Any]) -> None:
+        for port, value in inputs.items():
+            dag_store.put_json(port, value, at=(RUN_INPUTS,))
+
+    @staticmethod
+    def _check_spec_sizes(runner: Runner, spec: RunSpec) -> None:
+        """Every launch the run would make fits the spec budget, or every one that does
+        not is listed."""
+        errors = []
+        for leaf, leaf_spec in runner.leaves(spec):
+            launch = leaf.launch_for(leaf_spec)
+            if launch is None:
+                continue
+            try:
+                check_launch(
+                    launch, who=f"node {leaf_spec.node_id!r} (ref {leaf_spec.name!r})"
+                )
+            except SpecTooLarge as e:
+                errors.append(str(e))
+        if errors:
+            raise ExecutorError(
+                "run spec too large:\n" + "\n".join(f"  - {m}" for m in errors)
+            )
 
     # --------------------------------------------------------------------- run
     async def run(
@@ -195,6 +222,17 @@ class Executor:
         run_store = _live(self._base.config.subscope((run_id,)))
         dag_store = _live(self._base.config.subscope(path.scope))
 
+        inputs = inputs or {}
+        runner = DagRunner(dag, self.plan, build_ref)
+        spec = RunSpec(
+            name=dag,
+            run_id=run_id,
+            instance_id=str(path),
+            store_out=dag_store,
+            inputs=self._bind_inputs(inputs),
+        )
+        self._check_spec_sizes(runner, spec)
+
         # a completed run is self-describing: the graph sits beside the data
         run_store.put_json(PLAN_KEY, self.plan.encode())
         run_store.put_json(PLACEMENT_KEY, self.placements.encode())
@@ -203,18 +241,9 @@ class Executor:
             IMAGES_KEY, {ref: {"id": image.id} for ref, image in sorted(images.items())}
         )
 
-        bindings = self._stage_inputs(dag_store, inputs or {})
+        self._stage_inputs(dag_store, inputs)
 
-        runner = DagRunner(dag, self.plan, build_ref)
-        code = await runner.run(
-            RunSpec(
-                name=dag,
-                run_id=run_id,
-                instance_id=str(path),
-                store_out=dag_store,
-                inputs=bindings,
-            )
-        )
+        code = await runner.run(spec)
         if code != 0:
             raise ExecutorError(f"run {run_id} exited {code}")
 

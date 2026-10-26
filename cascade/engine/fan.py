@@ -27,7 +27,7 @@ global scheduling is deliberately out of scope.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Mapping
+from typing import Any, Awaitable, Iterator, Mapping
 
 from cascade.engine.concurrency import run_all
 from cascade.protocol.binding import INPUTS_SCOPE, InputBinding, InputBindings
@@ -41,6 +41,11 @@ from cascade.store.registry import from_config
 
 
 SCATTER_INPUT = INPUTS_SCOPE
+
+WIDEST_LANE = 99_999
+"""The lane index ``leaves`` assumes, since a fan's width is known only once it runs. A
+lane's index is in its identity and its store scope, so a wider fan's specs are a few
+characters longer; the check at spawn still catches those."""
 
 
 class FanError(Exception):
@@ -128,10 +133,27 @@ class FanRunner(RunnerCoroBase):
         if code != 0:
             raise FanError(f"{spec.instance_id}: exited {code}")
 
-    # -------------------------------------------------------------------- run
-    async def _run_fan(self, spec: RunSpec) -> int:
+    def _element_scope(self, spec: RunSpec, index: int) -> tuple[str, ...]:
+        """Where lane ``index``'s element is staged, relative to the lanes' reader."""
+        node_prefix = (spec.node_id,) if spec.node_id else ()
+        return (*node_prefix, str(index), SCATTER_INPUT)
+
+    @staticmethod
+    def _require_stores(spec: RunSpec) -> None:
         if spec.store_in is None or spec.store_out is None:
             raise FanError("a fanned node needs both a reader and a writer store")
+
+    def leaves(self, spec: RunSpec) -> Iterator[tuple[Runner, RunSpec]]:
+        """One lane's leaves, at the widest lane index assumed: every lane's spec has
+        the same shape, so one stands for all."""
+        self._require_stores(spec)
+        path = InstancePath.parse(spec.instance_id or spec.run_id)
+        lane = self._lane_spec(spec, path, WIDEST_LANE, self._element_scope(spec, WIDEST_LANE))
+        yield from self.child.leaves(lane)
+
+    # -------------------------------------------------------------------- run
+    async def _run_fan(self, spec: RunSpec) -> int:
+        self._require_stores(spec)
 
         path = InstancePath.parse(spec.instance_id or spec.run_id)
         binding = self._scatter_binding(spec)
@@ -139,12 +161,10 @@ class FanRunner(RunnerCoroBase):
 
         # stage one element per lane -- the only copy in the system, and the only
         # way a slice becomes addressable
-        node_prefix = (spec.node_id,) if spec.node_id else ()
         lanes = []
         for index, element in enumerate(elements):
             spec.store_out.put_json(self.scatter_port, element, at=(str(index), SCATTER_INPUT))
-            element_scope = (*node_prefix, str(index), SCATTER_INPUT)
-            lanes.append(self._lane_spec(spec, path, index, element_scope))
+            lanes.append(self._lane_spec(spec, path, index, self._element_scope(spec, index)))
 
         sem = asyncio.Semaphore(self.max_concurrent) if self.max_concurrent else None
         # lane i stays element i because each lane writes beneath its own index, not

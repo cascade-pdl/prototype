@@ -121,3 +121,17 @@ async def test_a_failed_wrapped_command_marks_nothing_and_still_tidies_up(tmp_pa
     assert await RunnerSubprocess(cmd=cmd, cwd=str(tmp_path), wrap=True).run(spec) == 4
     assert not store.has(DONE_MARKER)
     assert not os.path.exists(seen.read_text())
+
+
+from cascade.protocol.run_spec import SPEC_BUDGET, SpecTooLarge  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_a_launch_over_the_budget_is_refused_before_starting(tmp_path):
+    """A host process is held to a container's budget: the ref may move into an image."""
+    marker = tmp_path / "ran"
+    spec = RunSpec(name="n", run_id="r", instance_id="r/n", args={"blob": "x" * SPEC_BUDGET})
+    runner = RunnerSubprocess(cmd=[sys.executable, "-c", f"open({str(marker)!r}, 'w')"])
+    with pytest.raises(SpecTooLarge, match="^r/n: "):
+        await runner.spawn(spec)
+    assert not marker.exists()

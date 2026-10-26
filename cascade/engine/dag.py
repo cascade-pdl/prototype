@@ -31,7 +31,7 @@ no per-node result to record — an output always lives at its node's name.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Awaitable
+from typing import Awaitable, Iterator
 
 from cascade.graph import Graph
 from cascade.model.dag_node import DagNode
@@ -131,13 +131,26 @@ class DagRunner(RunnerCoroBase):
             }
         return {port: ((), port) for port in signature.outputs}
 
-    async def _run_node(
+    def _node_runner(self, node: DagNode) -> Runner:
+        runner = self._runner_for(node.runnable_name)
+        if node.scatter is not None:
+            # wrap whatever this node runs -- a ref or a whole dag -- and let the fan
+            # close at this node's boundary, so downstream sees one collection
+            runner = FanRunner(
+                child=runner,
+                scatter_port=node.scatter,
+                outputs=self._lane_outputs(node.runnable_name),
+                merge=node.merge,
+            )
+        return runner
+
+    def _child_spec(
         self,
         node: DagNode,
         spec: RunSpec,
         path: InstancePath,
         bindings: InputBindings,
-    ) -> None:
+    ) -> RunSpec:
         child_path = path.child(node.name)
         # the child's reader is this dag's slot: siblings visible, nothing copied
         reader = spec.store_out
@@ -150,7 +163,7 @@ class DagRunner(RunnerCoroBase):
                 for port, port_decl in (signature.outputs.items() if signature else ())
             )
         )
-        child = RunSpec(
+        return RunSpec(
             name=node.runnable_name,
             run_id=spec.run_id,
             node_id=node.name,
@@ -161,22 +174,21 @@ class DagRunner(RunnerCoroBase):
             outputs=declared,
             args=dict(node.args),
         )
-        runner = self._runner_for(node.runnable_name)
-        if node.scatter is not None:
-            # wrap whatever this node runs -- a ref or a whole dag -- and let the fan
-            # close at this node's boundary, so downstream sees one collection
-            runner = FanRunner(
-                child=runner,
-                scatter_port=node.scatter,
-                outputs=self._lane_outputs(node.runnable_name),
-                merge=node.merge,
-            )
-        code = await runner.run(child)
-        if code != 0:
-            raise DagRunError(f"{child_path}: exited {code}")
 
-    def _stage_inputs(self, spec: RunSpec) -> InputBindings:
-        """Copy each bound input into this dag's ``$in`` and rebind it there.
+    async def _run_node(
+        self,
+        node: DagNode,
+        spec: RunSpec,
+        path: InstancePath,
+        bindings: InputBindings,
+    ) -> None:
+        child = self._child_spec(node, spec, path, bindings)
+        code = await self._node_runner(node).run(child)
+        if code != 0:
+            raise DagRunError(f"{child.instance_id}: exited {code}")
+
+    def _staged(self, spec: RunSpec) -> InputBindings:
+        """This dag's inputs as bound once staged: each at ``$in/<port>``.
 
         Without a reader there is no parent scope: this is the root, and the executor
         has already staged the run's inputs into ``$in``.
@@ -184,17 +196,36 @@ class DagRunner(RunnerCoroBase):
         bindings = spec.inputs or InputBindings()
         if spec.store_in is None or not bindings.inputs:
             return bindings
+        return InputBindings(
+            inputs=tuple(replace(b, scope=(INPUTS_SCOPE,), key=b.port) for b in bindings.inputs)
+        )
+
+    def _stage_inputs(self, spec: RunSpec) -> InputBindings:
+        """Copy each bound input into this dag's ``$in`` and rebind it there."""
+        staged = self._staged(spec)
+        if staged is spec.inputs or not staged.inputs:
+            return staged
         if spec.store_out is None:
             raise DagRunError(f"dag {self.dag!r} has inputs to stage but no writer store")
-        staged = []
-        for b in bindings.inputs:
-            dst = (INPUTS_SCOPE,)
-            if not _same_location(spec.store_in, b.scope, b.key, spec.store_out, dst, b.port):
+        for b, to in zip(spec.inputs.inputs, staged.inputs):
+            if not _same_location(spec.store_in, b.scope, b.key, spec.store_out, to.scope, to.key):
                 spec.store_in.copy_resolved(
-                    b.key, b.port, from_=b.scope, to_=dst, dst_store=spec.store_out
+                    b.key, to.key, from_=b.scope, to_=to.scope, dst_store=spec.store_out
                 )
-            staged.append(replace(b, scope=dst, key=b.port))
-        return InputBindings(inputs=tuple(staged))
+        return staged
+
+    def leaves(self, spec: RunSpec) -> Iterator[tuple[Runner, RunSpec]]:
+        """Every ref launch this dag would make, with the spec it would get, by the same
+        steps as a run but reading and writing nothing."""
+        graph = self.graph
+        path = InstancePath.parse(spec.instance_id or spec.run_id)
+        dag_inputs = self._staged(spec)
+        for wave in graph.waves():
+            for name in wave:
+                node = graph.node(name)
+                bindings = resolve_node(node, self.plan, graph, dag_inputs)
+                child = self._child_spec(node, spec, path, bindings)
+                yield from self._node_runner(node).leaves(child)
 
     async def _run_dag(self, spec: RunSpec) -> int:
         graph = self.graph
