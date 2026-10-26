@@ -1,5 +1,8 @@
 # cascade — authoring layer
 
+Setting up a checkout, building the bundle, and running the examples in docker against a
+local S3 store: see `DEVELOPMENT.md`.
+
 Loads a pipeline, compiles it to a `Plan`, and validates it. The `Plan` is the
 authoring → execution boundary: it carries everything the executor needs and
 nothing it does not (no `Pipeline`, no passes, no `graphlib`).
