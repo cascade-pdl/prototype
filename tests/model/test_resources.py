@@ -104,7 +104,9 @@ def test_work_must_state_its_resources(runner):
     assert len(errors) == 1 and "must state `resources" in errors[0]
 
 
-@pytest.mark.parametrize("extra", ["resources: { cpu: 1, memory: 1GiB }", "requires: [www]"])
+@pytest.mark.parametrize(
+    "extra", ["resources: { cpu: 1, memory: 1GiB }", "requires: [www]", "limit: heavy"]
+)
 def test_a_stub_states_nothing(extra):
     errors = check(_pipeline("echo", extra))
     assert len(errors) == 1 and "never placed" in errors[0]
@@ -117,3 +119,16 @@ def test_resources_and_requires_travel_in_the_plan():
     back = Plan.decode(plan.encode())
     assert back.run_config["r"].resources == Resources(cpu=2, memory=8192, gpu=1)
     assert back.run_config["r"].requires == ("www",)
+
+
+def test_a_limit_label_travels_in_the_plan():
+    plan = compile_pipeline(
+        _pipeline("docker", "resources: { cpu: 1, memory: 1GiB }\n    limit: heavy")
+    )
+    assert Plan.decode(plan.encode()).run_config["r"].limit == "heavy"
+
+
+@pytest.mark.parametrize("label", ["", 3, ["heavy"]])
+def test_a_limit_is_one_label(label):
+    with pytest.raises(ValueError, match="`limit` must be a label"):
+        Ref.decode({"name": "r", "runner": "echo", "config": {}, "limit": label})

@@ -3,8 +3,9 @@
 Two stages, because two different things vary at two different times:
 
 - **run-wide settings** are fixed for a whole run: where each ref was placed, the backends
-  it was placed on, where a relative command resolves, and each docker ref's image as
-  resolved for the run. Bound once, by ``configure_ref_builder``.
+  it was placed on, where a relative command resolves, each docker ref's image as
+  resolved for the run, and the run's concurrency limits. Bound once, by
+  ``configure_ref_builder``.
 - **ref data** varies per node: the ref's name, its own config and its resolved ports.
   Passed at call time.
 
@@ -24,6 +25,11 @@ deployment by passing it. Nothing is re-matched here.
 ``build_runner``: it stored both, threaded both through its recursion, and read neither.
 Coordination carrying configuration through itself is what made the packages tangle.
 
+**Limits are bound here too.** A limit is run-wide, and this builder is the one thing every
+leaf of the run passes through, while one runner is built per dispatch: so the builder
+holds the run's one ``Limiter`` and wraps each leaf that has a pool in a
+``LimitedRunner``. Coordination never sees it.
+
 **Refs only.** ``RunnerKind`` has no ``dag`` member, and a ``DagRunner`` is built from a
 plan rather than from a ref's config — so the two are not alternatives, and a builder able
 to return either would be conflating substrate with coordination. ``DagRunner`` keeps its
@@ -38,6 +44,7 @@ from cascade.plan.run_config import RunConfig
 from cascade.plan.signature import Signature
 from cascade.protocol.runner import Runner
 from cascade.runners.docker import ImageConfig
+from cascade.runners.limiter import Limiter, LimitedRunner, Pool, backend_pool, named_pool
 from cascade.runners.registry import build_runner
 from cascade.substrate.backends import Backend
 from cascade.substrate.placement import PlacementError, PlacementMap
@@ -56,11 +63,14 @@ def build_ref(
     backends: Sequence[Backend] = (),
     cwd: str | None = None,
     images: Mapping[str, ImageConfig] | None = None,
+    limiter: Limiter | None = None,
 ) -> Runner:
-    """Build one ref's runner on the backend it was placed on.
+    """Build one ref's runner on the backend it was placed on, holding its slots in
+    ``limiter`` while it runs.
 
     With no ``placements`` every ref runs on the uncapped local host: the no-deployment
-    case (tests, ``cascade run --backend``). A run with a deployment always passes them.
+    case (tests, ``cascade run --backend``), where there is no policy and so no limit. A
+    run with a deployment always passes them.
     """
     if placements is None or config.runner is RunnerKind.echo:
         return build_runner(config, signature=signature, cwd=cwd)
@@ -71,7 +81,30 @@ def build_ref(
     if backend is None:
         raise PlacementError([f"ref {name!r} is placed on unknown backend {placed!r}"])
     image = (images or {}).get(name)
-    return build_runner(config, backend, signature=signature, cwd=cwd, image=image)
+    runner = build_runner(config, backend, signature=signature, cwd=cwd, image=image)
+    pools = _pools(backend, config, limiter)
+    return LimitedRunner(runner, limiter, pools) if limiter and pools else runner
+
+
+def _pools(backend: Backend, config: RunConfig, limiter: Limiter | None) -> tuple[Pool, ...]:
+    """Every pool a ref on ``backend`` counts against. A label the limiter does not know
+    is an error, never "unlimited" (placement reports it before the run)."""
+    pools = []
+    if backend.concurrency is not None:
+        pools.append(backend_pool(backend.name))
+    if config.limit is not None:
+        pool = named_pool(config.limit)
+        if limiter is None or limiter.capacity(pool) is None:
+            raise PlacementError([f"limit {config.limit!r} has no capacity in the deployment"])
+        pools.append(pool)
+    return tuple(pools)
+
+
+def run_limiter(backends: Sequence[Backend], limits: Mapping[str, int]) -> Limiter:
+    """The pools for one run: each capped backend, and each named limit."""
+    capacities = {backend_pool(b.name): b.concurrency for b in backends if b.concurrency}
+    capacities.update({named_pool(label): n for label, n in limits.items()})
+    return Limiter(capacities)
 
 
 def configure_ref_builder(
@@ -79,8 +112,12 @@ def configure_ref_builder(
     backends: Sequence[Backend] = (),
     cwd: str | None = None,
     images: Mapping[str, ImageConfig] | None = None,
+    limits: Mapping[str, int] | None = None,
 ) -> RefRunnerBuilder:
     """Bind the run-wide half, leaving a function of ref data alone.
+
+    One ``Limiter`` per builder, so one per run: backends' ``concurrency`` and the
+    deployment's named ``limits`` count across the whole run. Build a new builder per run.
 
     Takes the values it reads rather than a ``Deployment``: the store binding is no
     business of a runner, and ``cwd`` is not in a deployment file at all. An earlier
@@ -89,11 +126,12 @@ def configure_ref_builder(
     """
     bound_backends = tuple(backends)
     bound_images = dict(images or {})
+    limiter = run_limiter(bound_backends, limits or {})
 
     def builder(name: str, config: RunConfig, signature: Signature | None = None) -> Runner:
         return build_ref(
             name, config, signature, placements=placements, backends=bound_backends,
-            cwd=cwd, images=bound_images,
+            cwd=cwd, images=bound_images, limiter=limiter,
         )
 
     return builder

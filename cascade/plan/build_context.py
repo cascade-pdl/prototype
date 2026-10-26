@@ -21,6 +21,7 @@ under the same hash. Pin bases by digest (``FROM python:3.13-slim@sha256:...``).
 """
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import re
 from pathlib import Path
@@ -32,6 +33,9 @@ CASCADE_CONTEXT = "cascade"
 """The named build context carrying cascade's source: ``COPY --from=cascade ...``."""
 
 _USES_CASCADE = re.compile(rf"--from={CASCADE_CONTEXT}\b")
+
+_EDITOR_FILES = (".#*", "#*#", "*~")
+"""Emacs lock links, auto-saves and backups: never part of cascade's source."""
 
 
 class BuildContextError(Exception):
@@ -61,7 +65,8 @@ def cascade_source() -> list[tuple[str, Path]]:
     """cascade's installable source, as ``(path in the context, file)`` pairs.
 
     The minimum ``pip install`` needs: ``pyproject.toml``, the README it names, and the
-    package without bytecode. Only available when cascade runs from a source checkout.
+    package without bytecode or editor files (an unsaved edit would otherwise ship in the
+    image and change its hash). Only available when cascade runs from a source checkout.
     """
     root = Path(cascade.__file__).resolve().parent.parent
     pyproject = root / "pyproject.toml"
@@ -75,7 +80,10 @@ def cascade_source() -> list[tuple[str, Path]]:
     files += [
         (str(p.relative_to(root)), p)
         for p in sorted(package.rglob("*"))
-        if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"
+        if p.is_file()
+        and "__pycache__" not in p.parts
+        and p.suffix != ".pyc"
+        and not any(fnmatch.fnmatch(p.name, pattern) for pattern in _EDITOR_FILES)
     ]
     return files
 

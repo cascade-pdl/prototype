@@ -2,7 +2,8 @@
 
 A ref's signature says *what* it consumes/produces; its RunConfig says *how* to
 launch it — the kind-specific RefData (image, cmd; the runner kind is derived from
-it), the resources it needs, and the capabilities it requires. This is the ref-only
+it), the resources it needs, the capabilities it requires, and the named limit it
+counts against. This is the ref-only
 map (dags have no run config — they are composition): without it the executor knows a node runs ``detect`` but not that ``detect`` is a
 docker ref with image X.
 
@@ -28,6 +29,8 @@ class RunConfig:
     resources: Resources | None = None
     """Required on docker and subprocess refs (compile checks); ``None`` only for echo."""
     requires: tuple[str, ...] = ()
+    limit: str | None = None
+    """The class of work this ref is (a label); its capacity is the deployment's."""
 
     @property
     def runner(self) -> RunnerKind:
@@ -39,6 +42,7 @@ class RunConfig:
             config=ref.config,
             resources=ref.resources,
             requires=ref.requires,
+            limit=ref.limit,
         )
 
     def encode(self) -> dict[str, Any]:
@@ -47,6 +51,7 @@ class RunConfig:
             "config": self.config.encode(),
             "resources": self.resources.encode() if self.resources is not None else None,
             "requires": list(self.requires),
+            "limit": self.limit,
         }
 
     @classmethod
@@ -57,4 +62,5 @@ class RunConfig:
             config=decode_ref_data(kind, raw["config"]),
             resources=Resources.decode(resources) if resources is not None else None,
             requires=tuple(raw.get("requires") or ()),
+            limit=raw.get("limit"),
         )

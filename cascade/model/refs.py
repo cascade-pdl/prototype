@@ -22,7 +22,8 @@ class Ref:
     ``runner`` is derived from ``config``: the YAML tag picks the RefData class, and the
     class is the kind from then on, so the two cannot disagree. ``requires`` names
     capabilities a backend must ``provide`` (``www``, ``private``); it never names a
-    backend.
+    backend. ``limit`` names the class of work this ref belongs to (``heavy``,
+    ``portal_api``); the deployment's ``limits:`` says how many of that class run at once.
 
     YAML::
 
@@ -33,6 +34,7 @@ class Ref:
               image: 123456789.dkr.ecr.eu-west-1.amazonaws.com/flat-bug:v3
             resources: { cpu: 4, memory: 32GiB, gpu: 1 }
             requires: [www]
+            limit: heavy
             input:
               - { name: image, type: "io.Image" }
             output:
@@ -43,6 +45,7 @@ class Ref:
     config: RefData
     resources: Resources | None = None
     requires: tuple[str, ...] = ()
+    limit: str | None = None
     input: list[IoDecl] = field(default_factory=list)
     output: list[IoDecl] = field(default_factory=list)
 
@@ -60,11 +63,15 @@ class Ref:
                 "`resources:`, machine settings in the deployment's backend config"
             )
         resources = raw.get("resources")
+        limit = raw.get("limit")
+        if limit is not None and (not isinstance(limit, str) or not limit):
+            raise ValueError(f"ref {raw.get('name')!r}: `limit` must be a label, got {limit!r}")
         return cls(
             name=raw["name"],
             config=decode(kind, raw["config"]),
             resources=Resources.decode(resources) if resources is not None else None,
             requires=tuple(raw.get("requires") or ()),
+            limit=limit,
             input=[IoDecl.decode(i) for i in raw.get("input", [])],
             output=[IoDecl.decode(o) for o in raw.get("output", [])],
         )

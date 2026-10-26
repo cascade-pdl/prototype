@@ -118,3 +118,20 @@ def test_the_node_sdk_stays_thin():
         "cascade.store",
         "cascade.types",
     }
+
+
+def test_coordination_never_sees_a_limiter():
+    """Only leaves take slots: a dag or fan holding one per lane deadlocks once its lanes'
+    leaves wait for theirs, and counts coroutines that use nothing."""
+    root = _source_root()
+    for path in (root / "engine").rglob("*.py"):
+        if not path.is_file():
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+            elif isinstance(node, ast.Import):
+                imported = [a.name for a in node.names]
+            else:
+                continue
+            assert "cascade.runners.limiter" not in imported, path

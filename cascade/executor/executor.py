@@ -19,6 +19,8 @@ What it owns is everything that is true once per run rather than once per node:
   anything is written or started, so a node too big for ECS is refused up front;
 - **the placement** — which backend each ref runs on, decided once from the plan and
   the deployment before anything starts, and bound into the ref builder;
+- **the limits** — the backends' ``concurrency`` and the deployment's named ``limits``,
+  counted across the whole run by the ref builder made for it;
 - **the plan** — written into the run's scope, so a completed run is self-describing:
   anything rendering or auditing it later has the graph beside the data, and a remote
   dag runner has somewhere to fetch its slice from. The placement is written
@@ -211,8 +213,10 @@ class Executor:
             images = await resolve_images(self.plan, self.placements, self._backends)
         except ImageBuildError as e:
             raise ExecutorError(str(e))
+        # a builder per run: it holds the run's concurrency limits
         build_ref = self._build_ref or configure_ref_builder(
-            placements=self.placements, backends=self._backends, cwd=self.cwd, images=images
+            placements=self.placements, backends=self._backends, cwd=self.cwd, images=images,
+            limits=self.deployment.limits if self.deployment else None,
         )
 
         run_id = run_id or new_run_id()

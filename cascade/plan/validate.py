@@ -211,13 +211,13 @@ def _check_ref_resources(pipeline: Pipeline) -> list[str]:
 
     Required rather than defaulted: an unstated size would mean "uncapped" on local docker
     and "the smallest task" on ECS, so the same ref would pass on a laptop and run out of
-    memory in production. ``echo`` refs do no work and are never placed, so a size or a
-    capability on one would be believed and ignored.
+    memory in production. ``echo`` refs do no work and are never placed, so a size, a
+    capability or a limit on one would be believed and ignored.
     """
     errors: list[str] = []
     for ref in pipeline.refs:
         if ref.runner is RunnerKind.echo:
-            for name in ("resources", "requires"):
+            for name in ("resources", "requires", "limit"):
                 if getattr(ref, name):
                     errors.append(
                         f"ref {ref.name!r}: an echo ref is a stub and is never placed, "

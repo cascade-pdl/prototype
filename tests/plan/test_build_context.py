@@ -4,6 +4,7 @@ import shutil
 import pytest
 from yaml import safe_load
 
+import cascade
 from cascade.model.pipeline import Pipeline
 from cascade.plan import build_context
 from cascade.plan.build_context import check_context, context_hash, uses_cascade
@@ -60,6 +61,20 @@ def test_the_real_cascade_source_is_installable(context):
     names = [name for name, _ in build_context.cascade_source()]
     assert {"pyproject.toml", "README.md", "cascade/__init__.py"} <= set(names)
     assert not any("__pycache__" in n or n.endswith(".pyc") for n in names)
+
+
+def test_editor_files_are_not_cascade_source(monkeypatch, tmp_path):
+    (tmp_path / "pyproject.toml").write_text('name = "cascade-pdl"\n')
+    (tmp_path / "README.md").write_text("")
+    package = tmp_path / "cascade"
+    package.mkdir()
+    for name in ["__init__.py", "#build.py#", "build.py~"]:
+        (package / name).write_text("")
+    (package / ".#build.py").symlink_to(package / "__init__.py")  # a live lock link
+    monkeypatch.setattr(cascade, "__file__", str(package / "__init__.py"))
+
+    names = [name for name, _ in build_context.cascade_source()]
+    assert names == ["pyproject.toml", "README.md", "cascade/__init__.py"]
 
 
 def test_a_missing_directory_or_dockerfile_is_named(tmp_path, context):

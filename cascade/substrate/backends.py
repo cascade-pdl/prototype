@@ -4,7 +4,7 @@ A backend is one entry of the deployment's ordered ``backends:`` list. Its ``kin
 what sort of place it is — ``local`` (the executor's own host) or ``ecs`` — and several
 backends may share a kind: ``ecs-cpu`` on Fargate Spot beside ``ecs-gpu`` on an EC2
 capacity provider, on one cluster. Placement reads ``max`` and ``provides``; the runner
-builder reads ``config``; the concurrency limiter will read ``concurrency``.
+builder reads ``config``; the run's concurrency limiter reads ``concurrency``.
 
 ``max`` is policy, not hardware: setting it below what a laptop really has is how a
 deployment says "only small work runs here".

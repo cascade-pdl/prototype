@@ -112,3 +112,15 @@ def test_store_block_is_interchangeable_with_env_path(tmp_path):
     live = decode_store(store_block)
     assert isinstance(live, FileStore)
     assert live.scope == ("wilder", "moth")
+
+
+def test_named_limits_round_trip():
+    dep = Deployment.decode(_raw(limits={"heavy": 3, "portal_api": 5}))
+    assert dep.limits == {"heavy": 3, "portal_api": 5}
+    assert Deployment.decode(dep.encode()).limits == dep.limits
+
+
+@pytest.mark.parametrize("limits", [{"heavy": 0}, {"heavy": "3"}, {"heavy": True}, ["heavy"]])
+def test_a_limit_is_a_positive_number_of_tasks(limits):
+    with pytest.raises(DeploymentError):
+        Deployment.decode(_raw(limits=limits))

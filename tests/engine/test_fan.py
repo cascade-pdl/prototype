@@ -121,31 +121,8 @@ async def test_a_failing_lane_fails_the_fan(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_max_concurrent_bounds_the_lanes(tmp_path):
-    live = 0
-    peak = 0
-
-    async def watched(spec: RunSpec) -> int:
-        nonlocal live, peak
-        live += 1
-        peak = max(peak, live)
-        await asyncio.sleep(0.01)
-        live -= 1
-        spec.store_out.put_json("out", 1)
-        return 0
-
-    spec, _reader, _writer = _fan_setup(tmp_path, list(range(8)))
-    await FanRunner(
-        child=RunnerCoro(coro=watched), scatter_port="number",
-        outputs={"out": ((), "out")}, max_concurrent=2,
-    ).run(spec)
-    assert peak <= 2
-
-
-@pytest.mark.asyncio
-async def test_unset_max_concurrent_is_unbounded_by_design(tmp_path):
-    """Under a broker the scheduler owns the budget; a local cap would throttle work
-    it cannot see."""
+async def test_a_fan_starts_every_lane_at_once(tmp_path):
+    """Coordination limits nothing: how many run at once is the leaves' slots."""
     live = 0
     peak = 0
 

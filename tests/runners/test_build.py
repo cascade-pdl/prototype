@@ -14,6 +14,7 @@ from cascade.model.resources import Resources
 from cascade.plan.compile import compile_pipeline
 from cascade.runners import RunnerDocker, RunnerEcho
 from cascade.runners.build import build_ref, configure_ref_builder
+from cascade.runners.limiter import LimitedRunner, backend_pool, named_pool
 from cascade.substrate.backends import Backend, BackendKind, LocalConfig
 from cascade.substrate.placement import Placement, PlacementError, PlacementMap
 
@@ -55,9 +56,9 @@ def _ref(plan, name):
     return name, plan.run_config[name], plan.signatures.get(name)
 
 
-def _local(name="here", **config):
+def _local(name="here", concurrency=None, **config):
     return Backend(name=name, kind=BackendKind.local, max=Resources(8, 16384),
-                   config=LocalConfig(**config))
+                   config=LocalConfig(**config), concurrency=concurrency)
 
 
 def test_the_builder_turns_ref_data_into_a_runner(plan):
@@ -67,14 +68,14 @@ def test_the_builder_turns_ref_data_into_a_runner(plan):
 
 
 def test_the_builder_never_sees_a_plan_or_a_deployment(plan):
-    """Two stages: placement, backends and the run's resolved images bound once, ref data
-    passed per call. The name is ref data: it is the key into the placement the executor
-    already decided, so the builder reads a decision rather than making one."""
+    """Two stages: placement, backends, the run's resolved images and its limits bound
+    once, ref data passed per call. The name is ref data: it is the key into the
+    placement the executor already decided, so the builder reads a decision rather than making one."""
     assert list(inspect.signature(configure_ref_builder).parameters) == [
-        "placements", "backends", "cwd", "images"
+        "placements", "backends", "cwd", "images", "limits"
     ]
     assert list(inspect.signature(build_ref).parameters) == [
-        "name", "config", "signature", "placements", "backends", "cwd", "images"
+        "name", "config", "signature", "placements", "backends", "cwd", "images", "limiter"
     ]
 
 
@@ -151,3 +152,57 @@ def test_a_child_dag_gets_only_its_own_slice(plan):
     assert set(child.plan.node_graphs) == {"inner"}
     assert set(child.plan.run_config) == {"e"}   # not "d", which only `main` uses
     assert child.plan.entrypoint == "inner"      # the slice is self-describing
+
+
+# --- limits ----------------------------------------------------------------------
+
+def _labelled(plan, label):
+    name, config, signature = _ref(plan, "d")
+    config.limit = label
+    return name, config, signature
+
+
+def test_a_ref_on_a_capped_backend_runs_in_that_backends_pool(plan):
+    build = configure_ref_builder(
+        placements=PlacementMap((Placement("d", "here"),)), backends=[_local(concurrency=2)]
+    )
+    runner = build(*_ref(plan, "d"))
+    assert isinstance(runner, LimitedRunner) and isinstance(runner.inner, RunnerDocker)
+    assert runner.pools == (backend_pool("here"),)
+    assert runner.limiter.capacity(backend_pool("here")) == 2
+
+
+def test_an_uncapped_backend_and_no_label_mean_no_limit(plan):
+    build = configure_ref_builder(
+        placements=PlacementMap((Placement("d", "here"),)), backends=[_local()]
+    )
+    assert isinstance(build(*_ref(plan, "d")), RunnerDocker)
+
+
+def test_a_labelled_ref_takes_its_named_pool_with_its_backends(plan):
+    build = configure_ref_builder(
+        placements=PlacementMap((Placement("d", "here"),)), backends=[_local(concurrency=2)],
+        limits={"heavy": 1},
+    )
+    runner = build(*_labelled(plan, "heavy"))
+    assert runner.pools == (backend_pool("here"), named_pool("heavy"))
+
+
+def test_one_run_shares_one_limiter_across_every_runner_it_builds(plan):
+    """One runner is built per dispatch; a limiter per runner would limit nothing."""
+    build = configure_ref_builder(
+        placements=PlacementMap((Placement("d", "here"),)), backends=[_local(concurrency=2)]
+    )
+    assert build(*_ref(plan, "d")).limiter is build(*_ref(plan, "d")).limiter
+    other_run = configure_ref_builder(
+        placements=PlacementMap((Placement("d", "here"),)), backends=[_local(concurrency=2)]
+    )
+    assert other_run(*_ref(plan, "d")).limiter is not build(*_ref(plan, "d")).limiter
+
+
+def test_a_label_without_capacity_is_an_error_not_unlimited(plan):
+    build = configure_ref_builder(
+        placements=PlacementMap((Placement("d", "here"),)), backends=[_local()]
+    )
+    with pytest.raises(PlacementError, match="'heavy' has no capacity"):
+        build(*_labelled(plan, "heavy"))

@@ -18,15 +18,13 @@ N objects. So each lane's element is staged to ``<node>/<i>/$in/<port>`` and bou
 there. Every other input is bound unchanged, still pointing at its sibling's scope, so
 this is the only copy in the system and it is one element wide.
 
-Concurrency is bounded here because this is the only component that knows N. Left
-unset it is unbounded *by design*: under a broker (celery, ECS) the scheduler owns the
-budget, and a local semaphore would throttle work the scheduler cannot then see. Note
-that a cap here bounds one node's breadth, never the product across nested fans —
-global scheduling is deliberately out of scope.
+Every lane starts at once. How many *run* at once is not decided here: a cap on one
+fan bounds that node's breadth, never the product across nested fans or the sum over
+sibling fans. The run's limits are slots its leaf runners take (``cascade.runners.limiter``),
+so a lane waiting for one is just a coroutine waiting inside its leaf.
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Awaitable, Iterator, Mapping
 
 from cascade.engine.concurrency import run_all
@@ -65,7 +63,6 @@ class FanRunner(RunnerCoroBase):
         scatter_port: str,
         outputs: Mapping[str, tuple[tuple[str, ...], str]] | None = None,
         merge: str = "concat",
-        max_concurrent: int | None = None,
     ):
         self.child = child
         self.scatter_port = scatter_port
@@ -74,7 +71,6 @@ class FanRunner(RunnerCoroBase):
         # dag writes through its inner nodes rather than at its root.
         self.outputs = dict(outputs or {})
         self.merge = merge
-        self.max_concurrent = max_concurrent
 
     def _invoke(self, spec: RunSpec) -> Awaitable[int]:
         return self._run_fan(spec)
@@ -122,14 +118,10 @@ class FanRunner(RunnerCoroBase):
             )
         return binding
 
-    async def _run_lane(self, spec: RunSpec, sem: asyncio.Semaphore | None) -> None:
+    async def _run_lane(self, spec: RunSpec) -> None:
         # a non-zero lane raises here, not after the fan: that is what lets run_all
         # stop the other lanes at the first failure
-        if sem is None:
-            code = await self.child.run(spec)
-        else:
-            async with sem:
-                code = await self.child.run(spec)
+        code = await self.child.run(spec)
         if code != 0:
             raise FanError(f"{spec.instance_id}: exited {code}")
 
@@ -166,10 +158,9 @@ class FanRunner(RunnerCoroBase):
             spec.store_out.put_json(self.scatter_port, element, at=(str(index), SCATTER_INPUT))
             lanes.append(self._lane_spec(spec, path, index, self._element_scope(spec, index)))
 
-        sem = asyncio.Semaphore(self.max_concurrent) if self.max_concurrent else None
         # lane i stays element i because each lane writes beneath its own index, not
         # because of completion order; run_all decides what a failure does (fail fast)
-        await run_all(self._run_lane(s, sem) for s in lanes)
+        await run_all(self._run_lane(s) for s in lanes)
 
         self._gather(spec, len(lanes))
         return 0

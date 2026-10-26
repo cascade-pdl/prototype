@@ -3,8 +3,9 @@
 Lives with the executor because the executor is the only holder of a ``Deployment``
 Collects every problem at once, the way ``check`` does at compile time:
 refs that fit no backend, a deployment that cannot work as a whole (an ECS backend
-with a file store), and a wrapped docker ref on a local backend that has no bundle to
-wrap it with. An unplaceable ref found mid-run would leave half a run behind.
+with a file store), a wrapped docker ref on a local backend that has no bundle to
+wrap it with, and a ref ``limit:`` the deployment gives no capacity. An unplaceable ref
+found mid-run would leave half a run behind.
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ def place(plan: Plan, deployment: Deployment | None) -> PlacementMap:
     uncapped local host.
     """
     backends = [uncapped_local()] if deployment is None else deployment.backends
-    errors = [] if deployment is None else deployment.check()
+    errors = [] if deployment is None else deployment.check() + _undefined_limits(plan, deployment)
     try:
         placements = place_refs(plan, backends)
     except PlacementError as e:
@@ -34,6 +35,22 @@ def place(plan: Plan, deployment: Deployment | None) -> PlacementMap:
     if errors:
         raise PlacementError(errors)
     return placements
+
+
+def _undefined_limits(plan: Plan, deployment: Deployment) -> list[str]:
+    """Ref ``limit:`` labels with no capacity in the deployment.
+
+    An error rather than "unlimited": a limit that silently stops applying is how a run
+    floods an API the author capped."""
+    wanting: dict[str, list[str]] = {}
+    for ref, config in plan.run_config.items():
+        if config.limit is not None and config.limit not in deployment.limits:
+            wanting.setdefault(config.limit, []).append(ref)
+    return [
+        f"ref(s) {sorted(refs)} count against limit {label!r}, which the deployment's "
+        f"`limits:` does not define"
+        for label, refs in sorted(wanting.items())
+    ]
 
 
 def _missing_bundles(
