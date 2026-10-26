@@ -43,7 +43,7 @@ from cascade.model.runner_kinds import RunnerKind
 from cascade.plan.run_config import RunConfig
 from cascade.plan.signature import Signature
 from cascade.protocol.runner import Runner
-from cascade.runners.docker import ImageConfig
+from cascade.docker.images import ImageConfig
 from cascade.runners.limiter import Limiter, LimitedRunner, Pool, backend_pool, named_pool
 from cascade.runners.registry import build_runner
 from cascade.substrate.backends import Backend

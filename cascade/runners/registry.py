@@ -32,7 +32,8 @@ from cascade.plan.signature import Signature
 from cascade.substrate.backends import Backend, BackendKind, LocalConfig, RUNS, uncapped_local
 
 from cascade.protocol.runner import Runner
-from cascade.runners.docker import ImageConfig, RunnerDocker
+from cascade.docker.images import ImageConfig
+from cascade.runners.docker import RunnerDocker
 from cascade.runners.images import image_of
 from cascade.runners.echo import RunnerEcho
 from cascade.runners.process import RunnerSubprocess

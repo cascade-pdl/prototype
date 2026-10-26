@@ -1,10 +1,11 @@
 import asyncio
-import json
 import os
 import re
 import secrets
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
+from cascade.docker import containers, images
+from cascade.docker.images import ImageConfig
 from cascade.protocol.bundle import BUNDLE_ENTRYPOINT, BUNDLE_ROOT, STAGING_ROOT, wrap_args
 from cascade.protocol.runner import Runner
 from cascade.protocol.run_status import RunStatus
@@ -47,14 +48,9 @@ class HandleDocker(HandleSubprocess):
 
     async def kill(self) -> RunStatus:
         if self._process.returncode is None:
-            stop = await asyncio.create_subprocess_exec(
-                "docker", "stop", "--time", str(int(self.kill_grace)), self.name,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            # a non-zero exit means no such container: not created yet, or already
-            # gone. Either way the client is all that is left to stop.
-            await stop.wait()
+            # no such container means not created yet, or already gone: either way the
+            # client is all that is left to stop
+            await containers.stop(self.name, self.kill_grace)
         return await super().kill()
 
 
@@ -62,56 +58,15 @@ class DockerImageError(Exception):
     """The image to run is missing, or gives nothing to run."""
 
 
-@dataclass(frozen=True)
-class ImageConfig:
-    """What a wrapped run needs from an image's own config.
-
-    Read from the image because overriding the entrypoint (to put cascade first) discards
-    the image's own; it is passed on after ``--`` instead. ``id`` is what is run, so the
-    container is exactly the image that was inspected, even if its tag moves meanwhile.
-    """
-
-    id: str
-    entrypoint: tuple[str, ...]
-    cmd: tuple[str, ...]
-
-
 async def inspect_image(image: str, pull: bool) -> ImageConfig:
     """The image's id, entrypoint and default command, pulling it first if allowed."""
-    raw = await _docker_json("image", "inspect", image)
-    if raw is None and pull:
-        await _docker("pull", "--quiet", image)
-        raw = await _docker_json("image", "inspect", image)
-    if raw is None:
+    try:
+        return await images.inspect_image(image, pull=pull)
+    except images.ImageNotFound:
         raise DockerImageError(
             f"image {image!r} is not present locally"
             + ("" if pull else ", and the backend's `no_pull` stops it being pulled")
-        )
-    config = raw[0].get("Config") or {}
-    return ImageConfig(
-        id=raw[0]["Id"],
-        entrypoint=tuple(config.get("Entrypoint") or ()),
-        cmd=tuple(config.get("Cmd") or ()),
-    )
-
-
-async def image_exists(image: str) -> bool:
-    """Whether ``image`` is present locally."""
-    code, _, _ = await _docker("image", "inspect", image)
-    return code == 0
-
-
-async def _docker(*argv: str) -> tuple[int, bytes, bytes]:
-    proc = await asyncio.create_subprocess_exec(
-        "docker", *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
-    out, err = await proc.communicate()
-    return proc.returncode, out, err
-
-
-async def _docker_json(*argv: str):
-    code, out, _ = await _docker(*argv)
-    return json.loads(out) if code == 0 else None
+        ) from None
 
 
 class RunnerDocker(Runner):

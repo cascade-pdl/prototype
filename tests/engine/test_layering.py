@@ -9,6 +9,7 @@ import pathlib
 
 
 LAYERS = [
+    "cascade.docker",      # the Docker CLI as a library: imports nothing from cascade
     "cascade.types",       # the type system: depends on nothing
     "cascade.graph",
     "cascade.model",       # the pipeline document

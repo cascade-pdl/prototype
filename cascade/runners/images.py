@@ -17,12 +17,10 @@ instance of a ref runs the identical image even if its tag moves during the run.
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import shutil
 import sys
 import tempfile
-from collections import deque
 from pathlib import Path
 from typing import Sequence
 
@@ -35,7 +33,8 @@ from cascade.plan.build_context import (
     uses_cascade,
 )
 from cascade.plan.plan import Plan
-from cascade.runners.docker import DockerImageError, ImageConfig, image_exists, inspect_image
+from cascade.docker.images import BuildFailed, ImageConfig, build_image, image_exists
+from cascade.runners.docker import DockerImageError, inspect_image
 from cascade.substrate.backends import Backend, BackendKind, LocalConfig
 from cascade.substrate.naming import built_image
 from cascade.substrate.placement import PlacementMap
@@ -130,29 +129,20 @@ async def resolve_images(
 
 
 async def _build(image: str, context: Path) -> None:
-    """``docker build`` into ``image``, its output passed through to stderr."""
+    """``docker build`` into ``image``, with cascade's source as a named context when the
+    Dockerfile asks for it."""
     with tempfile.TemporaryDirectory(prefix="cascade-source-") as staged:
-        argv = ["docker", "build", "--tag", image]
+        build_contexts = {}
         if uses_cascade(context):
             for name, source in cascade_source():
                 target = Path(staged, name)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
-            argv += ["--build-context", f"{CASCADE_CONTEXT}={staged}"]
-        argv.append(str(context))
-
+            build_contexts[CASCADE_CONTEXT] = Path(staged)
         print(f"cascade: building {image} from {context}", file=sys.stderr, flush=True)
-        proc = await asyncio.create_subprocess_exec(
-            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
-        )
-        tail: deque[str] = deque(maxlen=15)
-        assert proc.stdout is not None
-        async for line in proc.stdout:
-            text = line.decode(errors="replace")
-            sys.stderr.write(text)
-            tail.append(text)
-        if code := await proc.wait():
+        try:
+            await build_image(image, context, build_contexts)
+        except BuildFailed as e:
             raise ImageBuildError(
-                f"building {image} from {context} failed (docker exit {code}):\n"
-                + "".join(tail)
+                f"building {image} from {context} failed (docker exit {e.code}):\n{e.tail}"
             )
