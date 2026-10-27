@@ -473,6 +473,27 @@ def test_run_writes_the_placement_beside_the_plan(echo_project, monkeypatch, cap
     assert json.loads((run / "placement").read_text()) == {"version": 1, "placements": []}
 
 
+def test_run_writes_the_deployment_it_ran_with(echo_project, monkeypatch, capsys):
+    """The placement names backends only; the deployment beside it says what they were,
+    with the store as the run resolved it."""
+    monkeypatch.chdir(echo_project)
+    (echo_project / "deployment.yaml").write_text(
+        "name: local\n"
+        "store: { kind: file, config: { root: ./_store, scope: [wilder, moth] } }\n"
+        "backends:\n"
+        "  - { name: box, kind: local, max: { cpu: 2, memory: 4GiB }, concurrency: 3 }\n"
+    )
+    assert main(["run", "pipeline.yaml", "--input", 'src="x"', "--run-id", "r7"]) == 0
+    run = echo_project / "_store" / "wilder" / "moth" / "r7"
+    recorded = Deployment.decode(json.loads((run / "deployment").read_text()))
+    written = Deployment.load(echo_project / "deployment.yaml")
+    assert recorded.name == "local"
+    assert recorded.backends == written.backends
+    # the root as resolved, so the record names one place whatever the working directory
+    assert recorded.store.root == str((echo_project / "_store").resolve())
+    assert recorded.store.scope == ("wilder", "moth")
+
+
 def test_run_with_backend_flags_ignores_the_deployment(
     echo_project, tmp_path_factory, monkeypatch, capsys
 ):

@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
@@ -70,6 +70,7 @@ RUN_INPUTS = INPUTS_SCOPE
 PLAN_KEY = "plan"
 PLACEMENT_KEY = "placement"
 IMAGES_KEY = "images"
+DEPLOYMENT_KEY = "deployment"
 
 
 class ExecutorError(Exception):
@@ -250,6 +251,17 @@ class Executor:
                 # (e.g. read-only): still the environment, still one line
                 raise ExecutorError(f"store: {e}") from None
 
+    async def _record_deployment(self, run_store: Store) -> None:
+        """The deployment as this run used it, beside the placement, which names its
+        backends only. The store is the one the run resolved (absolute root, ``--scope``
+        applied). A run with no deployment (``--backend`` flags, tests) records none:
+        it had none, and the uncapped host it ran on is not a deployment a file could
+        state."""
+        if self.deployment is None:
+            return
+        used = replace(self.deployment, store=self._base.config)
+        await run_store.put_json(DEPLOYMENT_KEY, used.encode())
+
     async def _container_access(self, access: ExitStack) -> ContainerCredentials | None:
         """The network local containers join, made if missing, and with an S3 store the
         credentials endpoint they fetch from, open until ``access`` closes."""
@@ -293,6 +305,7 @@ class Executor:
         await asyncio.gather(
             run_store.put_json(PLAN_KEY, self.plan.encode()),
             run_store.put_json(PLACEMENT_KEY, self.placements.encode()),
+            self._record_deployment(run_store),
             # which image each docker ref actually ran: a tag can move, an id cannot
             run_store.put_json(
                 IMAGES_KEY, {ref: {"id": image.id} for ref, image in sorted(images.items())}

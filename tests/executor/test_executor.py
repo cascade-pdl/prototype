@@ -257,3 +257,14 @@ async def test_a_store_error_during_the_run_is_one_line(plan, store, monkeypatch
     monkeypatch.setattr(FileStore, "_put", read_only)
     with pytest.raises(ExecutorError, match="store: s3://b/k: access denied"):
         await Executor(plan, store=store).run(inputs={"src": "x"})
+
+
+@pytest.mark.asyncio
+async def test_a_run_without_a_deployment_records_none(plan, store):
+    """Under ``--backend`` flags there is no deployment file, and the run does not
+    invent one: the uncapped host it ran on is not something a deployment can state."""
+    from cascade.executor import DEPLOYMENT_KEY
+
+    result = await Executor(plan, store=store).run(inputs={"src": "x"}, run_id="r1")
+    run_store = FileStore(store.config.subscope((result.run_id,)))
+    assert not await run_store.has(DEPLOYMENT_KEY)
