@@ -14,7 +14,9 @@ What the hash covers:
   index, so an image that installs it gets it from this checkout, passed to the build as
   the named context ``cascade`` (``COPY --from=cascade . /src/cascade``). A change to
   cascade then rebuilds exactly those images. ``cascade_source`` is the one list of those
-  files, used both to hash them here and to stage them for the build.
+  files, used both to hash them here and to stage them for the build. The checkout's
+  README is not among them: ``pyproject.toml`` names one, so a fixed stub stands in, and
+  editing the docs does not rename and rebuild every image that installs cascade.
 
 What it cannot cover: a ``FROM`` image by moving tag (``python:3.13-slim``) can change
 under the same hash. Pin bases by digest (``FROM python:3.13-slim@sha256:...``).
@@ -36,6 +38,18 @@ _USES_CASCADE = re.compile(rf"--from={CASCADE_CONTEXT}\b")
 
 _EDITOR_FILES = (".#*", "#*#", "*~")
 """Emacs lock links, auto-saves and backups: never part of cascade's source."""
+
+
+STUB_README = b"""# cascade
+
+Installed into this image from a source checkout by cascade's image builder. The
+documentation lives in the checkout.
+"""
+"""What ``README.md`` is in the staged source: only so ``pip install`` finds the file
+``pyproject.toml`` names. Fixed bytes, so it never changes an image's hash."""
+
+Source = Path | bytes
+"""A file to copy, or the bytes to write in its place."""
 
 
 class BuildContextError(Exception):
@@ -61,12 +75,13 @@ def uses_cascade(context: Path) -> bool:
     return bool(_USES_CASCADE.search((context / "Dockerfile").read_text()))
 
 
-def cascade_source() -> list[tuple[str, Path]]:
-    """cascade's installable source, as ``(path in the context, file)`` pairs.
+def cascade_source() -> list[tuple[str, Source]]:
+    """cascade's installable source, as ``(path in the context, file or bytes)`` pairs.
 
-    The minimum ``pip install`` needs: ``pyproject.toml``, the README it names, and the
-    package without bytecode or editor files (an unsaved edit would otherwise ship in the
-    image and change its hash). Only available when cascade runs from a source checkout.
+    The minimum ``pip install`` needs: ``pyproject.toml``, a README where it names one
+    (:data:`STUB_README`), and the package without bytecode or editor files (an unsaved
+    edit would otherwise ship in the image and change its hash). Only available when
+    cascade runs from a source checkout.
     """
     root = Path(cascade.__file__).resolve().parent.parent
     pyproject = root / "pyproject.toml"
@@ -75,7 +90,7 @@ def cascade_source() -> list[tuple[str, Path]]:
             "the Dockerfile copies from the `cascade` context, but cascade is not running "
             f"from a source checkout (no cascade pyproject.toml at {root})"
         )
-    files = [("pyproject.toml", pyproject), ("README.md", root / "README.md")]
+    files: list[tuple[str, Source]] = [("pyproject.toml", pyproject), ("README.md", STUB_README)]
     package = root / "cascade"
     files += [
         (str(p.relative_to(root)), p)
@@ -98,12 +113,15 @@ def context_hash(context: Path) -> str:
     return digest.hexdigest()
 
 
-def _add(digest, label: str, files: list[tuple[str, Path]]) -> None:
+def _add(digest, label: str, files: list[tuple[str, Source]]) -> None:
     """Paths, executable bits and contents, length-prefixed so no two different inputs
     can produce the same byte stream."""
     digest.update(f"{label}\0{len(files)}\0".encode())
-    for name, path in files:
-        data = path.read_bytes()
-        executable = path.stat().st_mode & 0o111 != 0
+    for name, source in files:
+        if isinstance(source, bytes):
+            data, executable = source, False
+        else:
+            data = source.read_bytes()
+            executable = source.stat().st_mode & 0o111 != 0
         digest.update(f"{name}\0{int(executable)}\0{len(data)}\0".encode())
         digest.update(data)

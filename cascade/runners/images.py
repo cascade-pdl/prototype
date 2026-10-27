@@ -137,7 +137,10 @@ async def _build(image: str, context: Path) -> None:
             for name, source in cascade_source():
                 target = Path(staged, name)
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, target)
+                if isinstance(source, bytes):
+                    target.write_bytes(source)
+                else:
+                    shutil.copy2(source, target)
             build_contexts[CASCADE_CONTEXT] = Path(staged)
         print(f"cascade: building {image} from {context}", file=sys.stderr, flush=True)
         try:

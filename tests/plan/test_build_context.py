@@ -77,6 +77,30 @@ def test_editor_files_are_not_cascade_source(monkeypatch, tmp_path):
     assert names == ["pyproject.toml", "README.md", "cascade/__init__.py"]
 
 
+def test_editing_the_readme_does_not_rename_an_image_that_installs_cascade(
+    context, monkeypatch, tmp_path
+):
+    """The checkout's README is docs, not something the image runs: a fixed stub stands
+    in for it, so a docs edit keeps the hash. A change to cascade's code still moves it."""
+    checkout = tmp_path / "checkout"
+    package = checkout / "cascade"
+    package.mkdir(parents=True)
+    (checkout / "pyproject.toml").write_text('name = "cascade-pdl"\nreadme = "README.md"\n')
+    (checkout / "README.md").write_text("v1")
+    (package / "__init__.py").write_text("v1")
+    monkeypatch.setattr(cascade, "__file__", str(package / "__init__.py"))
+    (context / "Dockerfile").write_text("FROM python@sha256:abc\nCOPY --from=cascade . /src\n")
+
+    before = context_hash(context)
+    (checkout / "README.md").write_text("v2, with three more lines of docs")
+    assert context_hash(context) == before
+    (package / "__init__.py").write_text("v2")
+    assert context_hash(context) != before
+
+    readme = dict(build_context.cascade_source())["README.md"]
+    assert readme == build_context.STUB_README
+
+
 def test_a_missing_directory_or_dockerfile_is_named(tmp_path, context):
     assert "does not exist" in check_context(tmp_path / "nope")[0]
     (context / "Dockerfile").unlink()
