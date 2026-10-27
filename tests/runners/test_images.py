@@ -160,7 +160,7 @@ async def test_only_local_backends_build_so_far(docker, project):
 
 def test_cascade_build_builds_then_reports_up_to_date(docker, project, monkeypatch, capsys):
     (project / "deployment.yaml").write_text(
-        "store: { kind: file, config: { root: ./_store, scope: [x] } }\n"
+        "store: { kind: file, config: { root: ./_store } }\n"
         "backends: [ { name: local, kind: local, max: { cpu: 2, memory: 2GiB } } ]\n")
     (project / "cascade.toml").write_text(
         '[project]\nname = "x"\npipeline = "pipeline.yaml"\ndeployment = "deployment.yaml"\n')

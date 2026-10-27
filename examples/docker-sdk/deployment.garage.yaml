@@ -10,7 +10,6 @@ store:
     bucket: cascade
     region: garage
     endpoint: http://localhost:3900
-    scope: [docker-sdk]
 
 backends:
   - name: local

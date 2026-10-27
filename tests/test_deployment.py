@@ -1,8 +1,10 @@
 """Tests for ``cascade.deployment``.
 
-The interchange property (a deployment's store block decodes through the
-registry's *store-level* decode into a live store) is the invariant the whole
-deployment -> engine -> node-env hop rests on, so it gets its own test.
+The interchange property (the store a deployment decodes to is the one that travels to
+nodes in the registry's ``{kind, config}`` envelope) is the invariant the whole
+deployment -> engine -> node-env hop rests on, so it gets its own test. The deployment
+file's own block differs from that envelope on purpose: its ``scope`` sits beside
+``kind``, not in ``config``.
 """
 import copy
 
@@ -120,14 +122,51 @@ def test_load_from_explicit_path(tmp_path):
     assert loaded.store.scope == ("run",)
 
 
-def test_store_block_is_interchangeable_with_env_path(tmp_path):
-    # the block a deployment emits (config-level encode) must decode through the
-    # store-level `decode` — the same call the node env path uses — into a live store
-    dep = Deployment(store=FileConfig(root=str(tmp_path), scope=("wilder", "moth")))
-    store_block = dep.encode()["store"]
-    live = decode_store(store_block)
+def test_the_decoded_store_is_what_travels_to_nodes(tmp_path):
+    """Decoded, the deployment's scope is in the ``StoreConfig``, and the node envelope
+    (``encode_config``, scope inside ``config``) rebuilds that same live store."""
+    from cascade.store.registry import encode_config
+
+    dep = Deployment.decode({
+        "store": {"kind": "file", "scope": ["wilder", "moth"], "config": {"root": str(tmp_path)}},
+    })
+    envelope = encode_config(dep.store)
+    assert envelope["config"]["scope"] == ["wilder", "moth"]
+    live = decode_store(envelope)
     assert isinstance(live, FileStore)
     assert live.scope == ("wilder", "moth")
+
+
+def test_the_store_block_carries_scope_beside_kind():
+    dep = Deployment(store=FileConfig(root="./_store", scope=("team",)), project_scope=False)
+    block = dep.encode()["store"]
+    assert block == {
+        "kind": "file", "scope": ["team"], "project_scope": False,
+        "config": {"root": "./_store"},
+    }
+    assert Deployment.decode(dep.encode()).project_scope is False
+
+
+def test_project_scope_is_on_by_default():
+    dep = Deployment.decode({"store": {"kind": "file", "config": {"root": "./_store"}}})
+    assert dep.project_scope is True
+    assert dep.store.scope == ()
+
+
+def test_a_scope_inside_config_is_refused_pointing_up():
+    """One place to write it: a scope in both places could disagree."""
+    with pytest.raises(DeploymentError, match="moved up.*beside `kind`"):
+        Deployment.decode({"store": {"kind": "file", "config": {"root": ".", "scope": ["x"]}}})
+
+
+@pytest.mark.parametrize("block, message", [
+    ({"kind": "file", "config": {"root": "."}, "scope": "x"}, "list of names"),
+    ({"kind": "file", "config": {"root": "."}, "project_scope": "no"}, "true or false"),
+    ({"kind": "file", "config": {"root": "."}, "prefix": "x"}, "unknown store field"),
+])
+def test_a_malformed_store_block_is_named(block, message):
+    with pytest.raises(DeploymentError, match=message):
+        Deployment.decode({"store": block})
 
 
 def test_named_limits_are_refused_pointing_at_the_pipeline():

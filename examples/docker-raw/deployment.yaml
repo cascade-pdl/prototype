@@ -5,7 +5,6 @@ store:
   kind: file
   config:
     root: ./_store
-    scope: [docker-raw]
 
 backends:
   - name: local

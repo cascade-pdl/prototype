@@ -73,21 +73,22 @@ DEPLOYMENT_SKELETON = """\
 
 name: local
 
-# Where data lives. The base scope is part of this binding, not of the project.
+# Where data lives. Every run lands under the project's name (from cascade.toml) first;
+# `scope` adds segments after it, and `project_scope: false` leaves the name out.
 store:
   kind: file                # file | s3
+  scope: []                 # e.g. [team] -> keys under <project>/team/<run>/...
   config:
     root: ./_store
-    scope: []               # e.g. [wilder, moth] — prefixes every key
 #
 # The s3 equivalent:
 # store:
 #   kind: s3
+#   scope: []
 #   config:
 #     bucket: my-bucket
 #     prefix: cascade
 #     region: eu-west-1
-#     scope: []
 #     endpoint: http://localhost:3900   # an S3-compatible service (garage); omit for AWS
 #
 # Docker containers get the credentials this machine uses for the store from a

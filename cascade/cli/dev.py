@@ -19,7 +19,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         garage.up(garage.DEV)
     except garage.GarageError as e:
         raise CliError(str(e))
-    block = yaml.safe_dump({"store": garage.DEV.store(["<project>"])}, sort_keys=False)
+    block = yaml.safe_dump({"store": garage.DEV.store()}, sort_keys=False)
     print(f"garage is up at {garage.DEV.endpoint} (bucket {garage.BUCKET!r}, region "
           f"{garage.REGION!r}); data kept in volume {garage.DEV.volume!r}.\n")
     print("A deployment's store block for it:\n")

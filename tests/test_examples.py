@@ -9,14 +9,17 @@ import secrets
 import shutil
 import socket
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
 
 from cascade.cli import main
+from cascade.deployment import Deployment
+from cascade.project import find_project
 from cascade.store.file_store import FileConfig, FileStore
-from cascade.store.registry import decode as live_store
+from cascade.store.registry import decode as live_store, encode_config
 from cascade.dev import garage
 
 
@@ -64,19 +67,21 @@ def run(dest: Path, capsys, run_id: str, deployment: str = "deployment.yaml") ->
     """``cascade run`` in ``dest``; returns each dag output's value.
 
     ``cascade run`` reports where outputs are, relative to the run's own scope (the
-    deployment's store scope, the run id, the entrypoint dag), so they are read from
-    there."""
+    project's name, the deployment's store scope, the run id, the entrypoint dag), so
+    they are read from there."""
     capsys.readouterr()
     argv = ["run", "pipeline.yaml", "--run-id", run_id, "--deployment", deployment]
     assert main(argv) == 0, capsys.readouterr().err
-    deployment = yaml.safe_load((dest / deployment).read_text())
+    loaded = Deployment.load(dest / deployment)
+    found, _root = find_project(dest)
     pipeline = yaml.safe_load((dest / "pipeline.yaml").read_text())
-    block = deployment["store"]
-    if block["kind"] == "file":
-        block["config"]["root"] = str(dest / block["config"]["root"])
-    base = live_store(block)
+    config = loaded.store
+    if isinstance(config, FileConfig):
+        config = replace(config, root=str(dest / config.root))
+    if loaded.project_scope:
+        config = replace(config, scope=(found.name, *config.scope))
     run_scope = (run_id, pipeline["entrypoint"])
-    store = type(base)(base.config.subscope(run_scope))
+    store = live_store(encode_config(config.subscope(run_scope)))
     values = {}
     for line in capsys.readouterr().out.splitlines()[1:]:
         port, _, path = line.strip().partition(": ")
@@ -169,9 +174,9 @@ def test_docker_examples_run_against_garage_with_served_credentials(
     for key, value in keys.env().items():
         monkeypatch.setenv(key, value)
     committed = yaml.safe_load((EXAMPLES / example / "deployment.garage.yaml").read_text())
-    assert committed["store"] == garage.DEV.store([example])
+    assert committed["store"] == garage.DEV.store()
     dest = project(
-        example, tmp_path, monkeypatch, store=instance.store([example]),
+        example, tmp_path, monkeypatch, store=instance.store(),
         deployment="deployment.garage.yaml",
     )
     assert run(dest, capsys, "s3", deployment="deployment.garage.yaml") == expected

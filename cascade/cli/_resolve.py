@@ -9,8 +9,11 @@ The precedence we settled on: **flags override deployment override nothing.**
 - neither              -> a hard error. No silent fallback to some default store
   location: staging into a surprise directory is worse than failing loudly.
 
-``--scope`` is the one universal override (every ``StoreConfig`` has a scope), and
-it is applied on top of whichever base config the rules above produced.
+A project's runs land under its own name first: with a project, the store's scope is
+``(project name, *deployment scope)``, unless the deployment says
+``store.project_scope: false``. ``--scope`` is the one universal override (every
+``StoreConfig`` has a scope); it replaces the deployment's part only, so the project's
+name stays in front. Under ``--backend`` no project is read and nothing is added.
 
 This lives in the library-facing CLI layer, not inside a command, because the
 eventual executor resolves a store the same way — one resolver, no drift.
@@ -66,23 +69,17 @@ def _config_from_flags(args: argparse.Namespace) -> StoreConfig:
     raise CliError(f"unknown backend {args.backend!r}")
 
 
-def _project_root(args: argparse.Namespace) -> Path:
+def _find_project(args: argparse.Namespace):
     try:
-        _project, root = find_project(args.project)
+        return find_project(args.project)
     except ProjectNotFound:
         raise CliError(
             "not inside a cascade project; pass --backend/--root or cd into one"
         )
-    return root
 
 
 def _load_deployment(args: argparse.Namespace) -> Deployment:
-    try:
-        project, root = find_project(args.project)
-    except ProjectNotFound:
-        raise CliError(
-            "not inside a cascade project; pass --backend/--root or cd into one"
-        )
+    project, root = _find_project(args)
     dep_path = args.deployment or project.deployment_file(root)
     try:
         return Deployment.load(dep_path)
@@ -90,10 +87,6 @@ def _load_deployment(args: argparse.Namespace) -> Deployment:
         raise CliError(f"deployment file not found: {dep_path}")
     except DeploymentError as e:
         raise CliError(f"invalid deployment {dep_path}: {e}")
-
-
-def _config_from_project(args: argparse.Namespace) -> StoreConfig:
-    return _load_deployment(args).store
 
 
 def resolve_deployment(args: argparse.Namespace) -> Deployment | None:
@@ -122,12 +115,17 @@ def build_store(args: argparse.Namespace) -> Store:
     if args.backend:
         # a flag-supplied root is relative to where the operator typed it
         config = _absolute_root(_config_from_flags(args), Path.cwd())
+        if args.scope is not None:
+            config = replace(config, scope=tuple(args.scope))
     else:
-        project_root = _project_root(args)
+        project, project_root = _find_project(args)
+        deployment = _load_deployment(args)
         # a deployment-supplied root is relative to the project that declared it
-        config = _absolute_root(_config_from_project(args), project_root)
-    if args.scope is not None:
-        config = replace(config, scope=tuple(args.scope))
+        config = _absolute_root(deployment.store, project_root)
+        if args.scope is not None:
+            config = replace(config, scope=tuple(args.scope))
+        if deployment.project_scope:
+            config = replace(config, scope=(project.name, *config.scope))
     # go through the registry envelope so this is exactly the store a node would
     # reconstruct from CASCADE_STORE_CONF — same bytes, same object
     return build_live_store(encode_config(config))

@@ -6,7 +6,6 @@ store:
   kind: file
   config:
     root: ./_store
-    scope: [docker-sdk]
 
 backends:
   - name: local

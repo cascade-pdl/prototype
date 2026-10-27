@@ -10,10 +10,15 @@ A backend's own cap is its ``concurrency``: a fact about that machine or cluster
 limits (how many ``bulky`` refs at once) are not here: they are about the work, so the
 pipeline declares them.
 
-The **store lives here, base scope included** — it is a substrate concern, not an
-identity one, so the same project can target different buckets/prefixes per
-deployment. Scope is not a separate field: it is already a field of the concrete
-``StoreConfig`` (``FileConfig``/``S3Config``), so it rides inside the store block.
+The **store lives here** — a substrate concern, so the same project can target
+different buckets/prefixes per deployment. Where in it a project's runs land starts
+with the project's own name (its identity, from ``cascade.toml``), added by whoever
+holds the project when it resolves the store; the deployment adds its own ``scope``
+after it, or turns the project segment off with ``project_scope: false``. Both sit in
+the store block beside ``kind``, not inside ``config``: scope is not a backend setting
+(every store has one), and ``config`` holds only what a backend needs. Decoded, the
+scope lands in the ``StoreConfig``, which is what nodes receive; ``config.scope`` in a
+file is refused, so it is written in one place.
 
 Unlike the project loader, this module does **no discovery**: a deployment is
 loaded from an explicit path (the caller — a CLI command, or the project's
@@ -50,6 +55,10 @@ class Deployment:
     store: StoreConfig
     name: str | None = None
     backends: list[Backend] = field(default_factory=list)
+    project_scope: bool = True
+    """Whether a project's runs land under the project's name first (the default). The
+    deployment's own ``store.scope`` is already in ``store``; the name is added by the
+    caller holding the project (``cascade.cli._resolve.build_store``)."""
 
     def __post_init__(self) -> None:
         names = [b.name for b in self.backends]
@@ -74,9 +83,17 @@ class Deployment:
         return errors
 
     def encode(self) -> dict[str, Any]:
+        block = encode_config(self.store)
+        config = dict(block["config"])
+        scope = config.pop("scope", [])
         return {
             "name": self.name,
-            "store": encode_config(self.store),
+            "store": {
+                "kind": block["kind"],
+                "scope": list(scope),
+                "project_scope": self.project_scope,
+                "config": config,
+            },
             "backends": [b.encode() for b in self.backends],
         }
 
@@ -101,10 +118,12 @@ class Deployment:
             backends = [Backend.decode(b) for b in raw.get("backends") or ()]
         except BackendError as e:
             raise DeploymentError(str(e))
+        store, project_scope = _decode_store(raw.get("store"))
         return cls(
-            store=decode_config(raw["store"]),
+            store=store,
             name=raw.get("name"),
             backends=backends,
+            project_scope=project_scope,
         )
 
     @classmethod
@@ -122,3 +141,29 @@ class Deployment:
         with open(path, "w") as f:
             f.write(self.dump())
 
+
+def _decode_store(raw: Any) -> tuple[StoreConfig, bool]:
+    """A ``store:`` block: ``kind``, ``config``, and beside them ``scope`` and
+    ``project_scope``. The scope goes into the ``StoreConfig``."""
+    if not isinstance(raw, dict) or "kind" not in raw:
+        raise DeploymentError("`store:` needs a `kind` (file or s3) and its `config`")
+    unknown = set(raw) - {"kind", "config", "scope", "project_scope"}
+    if unknown:
+        raise DeploymentError(f"unknown store field(s): {sorted(unknown)}")
+    config = dict(raw.get("config") or {})
+    if "scope" in config:
+        raise DeploymentError(
+            "`store.config.scope` moved up: write `scope: [...]` in the store block, beside "
+            "`kind`; the project's name is added in front of it unless `project_scope: false`"
+        )
+    scope = raw.get("scope") or []
+    if not isinstance(scope, list) or not all(isinstance(s, str) and s for s in scope):
+        raise DeploymentError(f"`store.scope` must be a list of names, got {scope!r}")
+    project_scope = raw.get("project_scope", True)
+    if not isinstance(project_scope, bool):
+        raise DeploymentError(f"`store.project_scope` must be true or false, got {project_scope!r}")
+    try:
+        store = decode_config({"kind": raw["kind"], "config": {**config, "scope": scope}})
+    except (TypeError, ValueError) as e:
+        raise DeploymentError(f"invalid store: {e}")
+    return store, project_scope

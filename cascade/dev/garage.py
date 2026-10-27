@@ -75,9 +75,13 @@ class Instance:
         return f"http://localhost:{self.port}"
 
     def store(self, scope: list[str] | None = None) -> dict:
-        """A deployment's ``store:`` block for it."""
-        config = {"bucket": BUCKET, "region": REGION, "endpoint": self.endpoint}
-        return {"kind": "s3", "config": {**config, "scope": list(scope or [])}}
+        """A deployment's ``store:`` block for it. Runs land under the project's name
+        without saying so here; ``scope`` adds segments after it."""
+        block = {
+            "kind": "s3",
+            "config": {"bucket": BUCKET, "region": REGION, "endpoint": self.endpoint},
+        }
+        return {**block, "scope": list(scope)} if scope else block
 
 
 DEV = Instance()

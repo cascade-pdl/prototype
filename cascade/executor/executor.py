@@ -254,12 +254,13 @@ class Executor:
     async def _record_deployment(self, run_store: Store) -> None:
         """The deployment as this run used it, beside the placement, which names its
         backends only. The store is the one the run resolved (absolute root, ``--scope``
-        applied). A run with no deployment (``--backend`` flags, tests) records none:
-        it had none, and the uncapped host it ran on is not a deployment a file could
-        state."""
+        applied, the project's name already in its scope, hence ``project_scope`` off:
+        read back as a deployment, it names the same keys). A run with no deployment
+        (``--backend`` flags, tests) records none: it had none, and the uncapped host it
+        ran on is not a deployment a file could state."""
         if self.deployment is None:
             return
-        used = replace(self.deployment, store=self._base.config)
+        used = replace(self.deployment, store=self._base.config, project_scope=False)
         await run_store.put_json(DEPLOYMENT_KEY, used.encode())
 
     async def _container_access(self, access: ExitStack) -> ContainerCredentials | None:

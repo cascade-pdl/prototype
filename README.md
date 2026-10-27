@@ -97,6 +97,11 @@ A deployment's `store:` may be S3 or an S3-compatible service (garage, MinIO), n
       kind: s3
       config: { bucket: cascade, region: garage, endpoint: http://localhost:3900 }
 
+A project's runs land under its name first (`<project>/<run id>/...`, the name from
+`cascade.toml`), so one deployment can serve many projects. `scope: [...]` in the store
+block, beside `kind`, adds segments after the name; `project_scope: false` leaves the
+name out.
+
 Local docker containers run on the docker network `cascade` (`169.254.170.0/24`, created
 when missing). With an S3 store, the run serves the credentials it uses itself (env,
 profile or SSO) on the network's gateway, `169.254.170.2`, and containers fetch them

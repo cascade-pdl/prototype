@@ -38,9 +38,8 @@ def project(tmp_path, pipeline_str):
     )
     (tmp_path / "deployment.yaml").write_text(
         "name: local\n"
-        "store:\n  kind: file\n  config:\n"
+        "store:\n  kind: file\n  scope: [wilder, moth]\n  project_scope: false\n  config:\n"
         f"    root: {tmp_path / '_store'}\n"
-        "    scope: [wilder, moth]\n"
     )
     (tmp_path / "pipeline.yaml").write_text(pipeline_str)
     nested = tmp_path / "src" / "deep"
@@ -137,6 +136,59 @@ def test_store_roundtrip_via_project_discovery(project, monkeypatch, capsys):
 
     # the deployment's scope decided the on-disk location
     assert (project / "_store" / "wilder" / "moth" / "input.txt").is_file()
+
+
+def _deployment(project, block: str) -> None:
+    (project / "deployment.yaml").write_text(
+        f"name: local\nstore: {{ kind: file, {block}config: {{ root: ./_store }} }}\n"
+    )
+
+
+def _stage(project, *flags) -> None:
+    (project / "f.txt").write_text("x")
+    assert main(["store", "stage", "k", str(project / "f.txt"), *flags]) == 0
+
+
+def test_a_projects_data_lands_under_its_name_first(project, monkeypatch):
+    """One deployment can serve many projects: each lands under its own name, and the
+    deployment's own scope comes after it."""
+    monkeypatch.chdir(project)
+    _deployment(project, "scope: [team], ")
+    _stage(project)
+    assert (project / "_store" / "wilder-moth" / "team" / "k").is_file()
+
+
+def test_project_scope_false_leaves_the_name_out(project, monkeypatch):
+    monkeypatch.chdir(project)
+    _deployment(project, "scope: [team], project_scope: false, ")
+    _stage(project)
+    assert (project / "_store" / "team" / "k").is_file()
+
+
+def test_the_scope_flag_replaces_the_deployments_scope_but_keeps_the_project(
+    project, monkeypatch
+):
+    monkeypatch.chdir(project)
+    _deployment(project, "scope: [team], ")
+    _stage(project, "--scope", "other")
+    assert (project / "_store" / "wilder-moth" / "other" / "k").is_file()
+
+
+def test_backend_flags_read_no_project_and_add_no_name(project, monkeypatch):
+    monkeypatch.chdir(project)
+    _stage(project, "--backend", "file", "--root", str(project / "flags"), "--scope", "s")
+    assert (project / "flags" / "s" / "k").is_file()
+
+
+def test_a_node_writes_under_the_same_scope_as_the_run(echo_project, monkeypatch, capsys):
+    """The name is folded into the scope once, by the CLI: nodes receive a plain scope
+    and land beside the executor's own writes."""
+    monkeypatch.chdir(echo_project)
+    _deployment(echo_project, "")
+    assert main(["run", "pipeline.yaml", "--input", 'src="x"', "--run-id", "r1"]) == 0
+    run = echo_project / "_store" / "wilder-moth" / "r1"
+    assert (run / "plan").is_file()                       # the executor's write
+    assert (run / "main" / "load" / "items").is_file()    # a node's write
 
 
 def test_store_stage_dir_with_at_fragments(project, monkeypatch, capsys):
@@ -479,7 +531,7 @@ def test_run_writes_the_deployment_it_ran_with(echo_project, monkeypatch, capsys
     monkeypatch.chdir(echo_project)
     (echo_project / "deployment.yaml").write_text(
         "name: local\n"
-        "store: { kind: file, config: { root: ./_store, scope: [wilder, moth] } }\n"
+        "store: { kind: file, scope: [wilder, moth], project_scope: false, config: { root: ./_store } }\n"
         "backends:\n"
         "  - { name: box, kind: local, max: { cpu: 2, memory: 4GiB }, concurrency: 3 }\n"
     )

@@ -71,7 +71,7 @@ def test_a_dag_entrypoint_is_untouched():
 def test_a_ref_entrypoint_runs_end_to_end(tmp_path, monkeypatch, capsys):
     (tmp_path / "pipeline.yaml").write_text(f"entrypoint: add-one\ninput: []\n{REFS}\ndags: []\n")
     (tmp_path / "deployment.yaml").write_text(
-        "store: { kind: file, config: { root: ./_store, scope: [x] } }\n"
+        "store: { kind: file, config: { root: ./_store } }\n"
         "backends: [ { name: local, kind: local, max: { cpu: 2, memory: 2GiB } } ]\n")
     (tmp_path / "cascade.toml").write_text(
         '[project]\nname = "x"\npipeline = "pipeline.yaml"\ndeployment = "deployment.yaml"\n')
