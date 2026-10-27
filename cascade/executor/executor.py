@@ -59,7 +59,8 @@ from cascade.runners.credentials import (
 )
 from cascade.runners.docker import CONTAINER_NETWORK
 from cascade.runners.images import ImageBuildError, prepare_images, resolve_images
-from cascade.engine.dag import DagRunner
+from cascade.engine.dag import DagRunError, DagRunner
+from cascade.engine.fan import FanError
 from cascade.executor.placement import place
 from cascade.substrate.backends import uncapped_local
 from cascade.substrate.placement import PlacementError
@@ -288,7 +289,12 @@ class Executor:
             self._stage_inputs(dag_store, inputs),
         )
 
-        code = await runner.run(spec)
+        try:
+            code = await runner.run(spec)
+        except (DagRunError, FanError) as e:
+            # a node that failed is the run's outcome, not a bug: its own stderr has
+            # already said why, so the run reports which instance, in one line
+            raise ExecutorError(f"run {run_id} failed: {e}") from None
         if code != 0:
             raise ExecutorError(f"run {run_id} exited {code}")
 

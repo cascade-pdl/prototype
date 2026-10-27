@@ -378,6 +378,40 @@ def test_run_reports_a_missing_input(echo_project, monkeypatch, capsys):
     assert "missing input" in capsys.readouterr().err
 
 
+FAILING_PIPELINE = """
+entrypoint: main
+input: []
+refs:
+  - name: boom
+    runner: subprocess
+    config: { cmd: ["sh", "-c", "echo boom >&2; exit 1"], wrap: false }
+    resources: { cpu: 0.5, memory: 256MiB }
+    input: []
+    output: [ { name: out, type: string } ]
+dags:
+  - name: main
+    input: []
+    nodes: [ { name: b, runs: boom } ]
+    output: [ { node: b, field: out, as: out } ]
+"""
+
+
+def test_a_failed_node_is_one_line_naming_the_instance(project, monkeypatch, capsys):
+    """A node that exits non-zero is the run's outcome, not a bug: the node's own stderr
+    says why, and cascade adds one line saying which instance, with no traceback."""
+    (project / "pipeline.yaml").write_text(FAILING_PIPELINE)
+    (project / "deployment.yaml").write_text(
+        "name: local\n"
+        f"store: {{ kind: file, config: {{ root: {project / '_store'} }} }}\n"
+        "backends: [ { name: local, kind: local, max: { cpu: 1, memory: 1GiB } } ]\n"
+    )
+    monkeypatch.chdir(project)
+    assert main(["run", "pipeline.yaml", "--run-id", "r9"]) == 2
+    err = capsys.readouterr().err
+    assert "cascade: error: run r9 failed: r9/main/b: exited 1" in err
+    assert "Traceback" not in err
+
+
 def test_run_rejects_a_malformed_input_flag(echo_project, monkeypatch, capsys):
     monkeypatch.chdir(echo_project)
     assert main(["run", "pipeline.yaml", "--input", "nonsense"]) == 2
