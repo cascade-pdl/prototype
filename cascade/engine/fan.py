@@ -97,8 +97,10 @@ class FanRunner(RunnerCoroBase):
             port=self.scatter_port,
             scope=element_scope,
             key=element_key,
-            # one element of the scattered collection: same config, one array level less
-            type=source.type.element() if source.type.depth > 0 else source.type,
+            # the port's own declared type, already that of one element: a scattered
+            # port declares what one lane receives, and the compiler checked it against
+            # the supplied collection one level down
+            type=source.type,
             config=source.config,
         )
         others = tuple(

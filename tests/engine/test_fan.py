@@ -29,7 +29,7 @@ async def _fan_setup(tmp_path, elements, outputs={"out": ((), "out")}):
         store_in=reader, store_out=writer,
         inputs=InputBindings(
             inputs=(InputBinding(port="number", scope=("src",), key="numbers",
-                                 type=TypeExpr.parse("int[]")),)
+                                 type=TypeExpr.parse("int")),)
         ),
     )
     return spec, reader, writer
@@ -517,3 +517,54 @@ async def test_the_lanes_of_a_fanned_subdag_copy_their_elements_at_once(tmp_path
                 store_out=store, inputs=InputBindings())
     ) == 0
     assert peak == 3
+
+
+@pytest.mark.asyncio
+async def test_a_lane_is_told_the_ports_declared_type_not_one_level_less(tmp_path):
+    """A scattered port declares what one lane receives. Over ``string[][]`` a port
+    declared ``string[]`` gets a list per lane, and its binding must say depth 1: the
+    node SDK checks the value against it (a scalar element hid this)."""
+    from yaml import safe_load
+    from cascade.model.pipeline import Pipeline
+    from cascade.plan.compile import compile_pipeline
+    from cascade.engine.dag import DagRunner
+
+    pipeline = """
+entrypoint: main
+input: []
+refs:
+  - { name: make, runner: echo, config: {}, input: [], output: [ { name: groups, type: "string[][]" } ] }
+  - { name: take, runner: echo, config: {}, input: [ { name: group, type: "string[]" } ],
+      output: [ { name: n, type: string } ] }
+dags:
+  - name: main
+    input: []
+    nodes:
+      - { name: m, runs: make }
+      - { name: t, runs: take, scatter: group, depends_on: [ { node: m, field: groups, as: group } ] }
+    output: [ { node: t, field: n, as: n } ]
+"""
+    plan = compile_pipeline(Pipeline.decode(safe_load(pipeline)))
+    seen = []
+
+    async def records(spec: RunSpec) -> int:
+        binding = spec.inputs.input_for("group")
+        value = await spec.store_in.read_json(binding.key, at=binding.scope)
+        seen.append((binding.type.render(), binding.depth, value))
+        await spec.store_out.put_json("n", "x")
+        return 0
+
+    def build(name, config, signature=None):
+        if name == "take":
+            return RunnerCoro(coro=records)
+        from cascade.runners.build import configure_ref_builder
+        return configure_ref_builder()(name, config, signature)
+
+    store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main")))
+    assert await DagRunner("main", plan, build).run(
+        RunSpec(name="main", run_id="r1", instance_id="r1/main", store_out=store, inputs=InputBindings())
+    ) == 0
+    assert len(seen) == 3
+    for rendered, depth, value in seen:
+        assert (rendered, depth) == ("string[]", 1)
+        assert isinstance(value, list)
