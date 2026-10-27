@@ -85,6 +85,86 @@ async def test_the_element_is_staged_for_each_lane(tmp_path):
     assert writer.get_json("number", at=("1", "$in")) == 8
 
 
+def _gathered_setup(tmp_path, values):
+    """Like ``_fan_setup``, but the upstream is a *distributed* collection, as a fan
+    gathers it: one object per element under ``src/<i>/v`` and a descriptor at
+    ``src/numbers``. Store calls on the reader and the fan's own writer are recorded."""
+    spec, reader, writer = _fan_setup(tmp_path, [])
+    for i, value in enumerate(values):
+        reader.put_json("v", value, at=("src", str(i)))
+    reader.write_collection("numbers", [((str(i),), "v") for i in range(len(values))], at=("src",))
+    calls = []
+    for name, store in (("reader", reader), ("writer", writer)):
+        for method in ("get", "put"):
+            original = getattr(store, method)
+
+            def recorded(*args, _original=original, _call=(name, method), **kwargs):
+                calls.append(_call)
+                return _original(*args, **kwargs)
+
+            setattr(store, method, recorded)
+    return spec, reader, writer, calls
+
+
+@pytest.mark.asyncio
+async def test_a_lane_is_bound_to_a_gathered_element_where_it_is(tmp_path):
+    """Over a distributed collection the fan reads the descriptor and nothing else:
+    lane i reads element i in place, and no element is copied."""
+    bound = {}
+
+    async def records_its_binding(spec: RunSpec) -> int:
+        binding = spec.inputs.input_for("number")
+        value = spec.store_in.get_json(binding.key, at=binding.scope)
+        bound[value] = (binding.scope, binding.key)
+        spec.store_out.put_json("out", value * 2)
+        return 0
+
+    spec, _reader, writer, calls = _gathered_setup(tmp_path, [7, 8, 9])
+    await FanRunner(
+        child=RunnerCoro(coro=records_its_binding), scatter_port="number",
+        outputs={"out": ((), "out")},
+    ).run(spec)
+
+    assert bound == {7: (("src", "0"), "v"), 8: (("src", "1"), "v"), 9: (("src", "2"), "v")}
+    assert writer.read_json("out") == [14, 16, 18]
+    # the fan: one read (the descriptor) and one write (the gather); each lane its read
+    assert calls.count(("reader", "get")) == 1 + 3
+    assert calls.count(("writer", "put")) == 1
+    assert not any("$in" in str(p) for p in tmp_path.rglob("*"))
+
+
+@pytest.mark.asyncio
+async def test_a_gathered_element_that_is_a_collection_reads_back_as_one(tmp_path):
+    """An element may itself be a descriptor (a fan of fans): bound in place, the lane
+    still reads a list."""
+    spec, reader, _writer, _calls = _gathered_setup(tmp_path, [])
+    for lane in range(2):
+        for j in range(2):
+            reader.put_json("v", lane * 10 + j, at=("src", str(lane), "parts", str(j)))
+        reader.write_collection("v", [(("parts", "0"), "v"), (("parts", "1"), "v")], at=("src", str(lane)))
+    reader.write_collection("numbers", [(("0",), "v"), (("1",), "v")], at=("src",))
+
+    seen = []
+
+    async def reads(spec: RunSpec) -> int:
+        binding = spec.inputs.input_for("number")
+        seen.append(spec.store_in.read_json(binding.key, at=binding.scope))
+        spec.store_out.put_json("out", 0)
+        return 0
+
+    await FanRunner(child=RunnerCoro(coro=reads), scatter_port="number", outputs={"out": ((), "out")}).run(spec)
+    assert sorted(seen) == [[0, 1], [10, 11]]
+
+
+@pytest.mark.asyncio
+async def test_scattering_over_a_single_value_is_an_error(tmp_path):
+    spec, _reader, _writer = _fan_setup(tmp_path, 5)
+    with pytest.raises(FanError, match="src/numbers is not a collection"):
+        await FanRunner(
+            child=RunnerCoro(coro=_double), scatter_port="number", outputs={"out": ((), "out")}
+        ).run(spec)
+
+
 @pytest.mark.asyncio
 async def test_an_empty_collection_fans_zero_lanes(tmp_path):
     """N=0 must produce an empty collection, not an error — a classic silent
@@ -350,3 +430,51 @@ async def test_a_failing_lane_stops_the_other_lanes_at_once(tmp_path):
         )
     assert sorted(stopped) == [1, 3]
     assert not writer.has("out")  # a failed fan gathers nothing
+
+
+CASE_D = """
+entrypoint: main
+input: []
+refs:
+  - { name: lister, runner: echo, config: {}, input: [], output: [ { name: images, type: "string[]" } ] }
+  - { name: detect, runner: echo, config: {}, input: [ { name: image, type: string } ], output: [ { name: dets, type: string } ] }
+  - { name: refine, runner: echo, config: {}, input: [ { name: dets, type: string } ], output: [ { name: clean, type: string } ] }
+dags:
+  - name: perdet
+    input: [ { name: dets, type: string } ]
+    nodes:
+      - { name: r, runs: refine, depends_on: [ { node: "$input", field: dets, as: dets } ] }
+    output: [ { node: r, field: clean, as: clean } ]
+  - name: main
+    input: []
+    nodes:
+      - { name: l, runs: lister }
+      - { name: d, runs: detect, scatter: image, depends_on: [ { node: l, field: images, as: image } ] }
+      - { name: p, runs: perdet, scatter: dets, depends_on: [ { node: d, field: dets, as: dets } ] }
+    output: [ { node: p, field: clean, as: clean } ]
+"""
+
+
+@pytest.mark.asyncio
+async def test_a_fan_over_a_gathered_collection_copies_only_into_subdag_lanes(tmp_path):
+    """``d`` fans a ref over ``l``'s single list: its elements are staged. ``p`` fans a
+    subdag over ``d``'s gathered output: the fan copies nothing, but each lane, being a
+    dag, copies its element into its own ``$in``, where its inner node reads it."""
+    from yaml import safe_load
+    from cascade.model.pipeline import Pipeline
+    from cascade.plan.compile import compile_pipeline
+    from cascade.engine.dag import DagRunner
+
+    plan = compile_pipeline(Pipeline.decode(safe_load(CASE_D)))
+    store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main")))
+    assert await DagRunner("main", plan).run(
+        RunSpec(name="main", run_id="r1", instance_id="r1/main",
+                store_out=store, inputs=InputBindings())
+    ) == 0
+
+    for lane in range(3):
+        assert store.has("image", at=("d", str(lane), "$in"))     # split from a list
+        assert store.get_json("dets", at=("p", str(lane), "$in")) == store.get_json(
+            "dets", at=("d", str(lane))
+        )
+        assert store.has("clean", at=("p", str(lane), "r"))
