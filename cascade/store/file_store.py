@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Self
 from dataclasses import dataclass, asdict, replace
 
-from cascade.store.base import BlockingStore, KeyNotFound, StoreConfig
+from cascade.store.base import BlockingStore, KeyNotFound, StoreConfig, StoreError
 
 
 @dataclass
@@ -75,6 +76,17 @@ class FileStore(BlockingStore):
 
     def _has(self, key: str, at: tuple[str, ...] = ()) -> bool:
         return self._build_path(key, at).is_file()
+
+    def _check(self) -> None:
+        """The root can be written: it exists as a writable directory, or it does not
+        exist yet and the nearest directory above it is writable (``put`` makes it)."""
+        path = self.root.resolve()
+        while not path.exists():
+            path = path.parent
+        if not path.is_dir():
+            raise StoreError(f"file store root {self.root}: {path} is not a directory")
+        if not os.access(path, os.W_OK | os.X_OK):
+            raise StoreError(f"file store root {self.root}: {path} is not writable")
 
     def _list(self, at: tuple[str, ...] = ()) -> list[str]:
         """List keys under a prefix (relative to the scoped root)."""

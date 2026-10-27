@@ -68,6 +68,11 @@ def seen(monkeypatch):
         seen["endpoint"].append("builder")
         raise Stop
 
+    async def usable(self):
+        pass
+
+    # these runs are about the network and the endpoint; the store is never reached
+    monkeypatch.setattr(S3Store, "check", usable)
     monkeypatch.setattr(executor_module, "prepare_images", nothing)
     monkeypatch.setattr(executor_module, "resolve_images", resolve)
     monkeypatch.setattr(executor_module, "ensure_network", ensure)

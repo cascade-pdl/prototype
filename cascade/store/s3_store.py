@@ -1,11 +1,12 @@
 from __future__ import annotations
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict, replace
 from typing import Any, Self
 
 from cascade.store.base import (
-    MAX_IN_FLIGHT, BlockingStore, KeyNotFound, Store, StoreConfig, blocking,
+    MAX_IN_FLIGHT, BlockingStore, KeyNotFound, Store, StoreConfig, StoreError, blocking,
 )
 
 
@@ -72,45 +73,85 @@ class S3Store(BlockingStore):
         return "/".join(parts)
 
     def _put(self, key: str, data: bytes, at: tuple[str, ...] = ()) -> str:
-        self.client.put_object(
-            Bucket=self.bucket, Key=self._build_key(key, at), Body=data
-        )
+        s3_key = self._build_key(key, at)
+        with self._errors(s3_key):
+            self.client.put_object(Bucket=self.bucket, Key=s3_key, Body=data)
         return key
 
     def _get(self, key: str, at: tuple[str, ...] = ()) -> bytes:
-        from botocore.exceptions import ClientError
-
         s3_key = self._build_key(key, at)
-        try:
-            resp = self.client.get_object(Bucket=self.bucket, Key=s3_key)
-        except ClientError as e:
-            if e.response["Error"]["Code"] in _MISSING:
-                raise KeyNotFound(f"s3://{self.bucket}/{s3_key}") from None
-            raise
-        return resp["Body"].read()
+        with self._errors(s3_key, missing=KeyNotFound):
+            return self.client.get_object(Bucket=self.bucket, Key=s3_key)["Body"].read()
 
     def _has(self, key: str, at: tuple[str, ...] = ()) -> bool:
-        from botocore.exceptions import ClientError
-
+        s3_key = self._build_key(key, at)
         try:
-            self.client.head_object(Bucket=self.bucket, Key=self._build_key(key, at))
+            with self._errors(s3_key, missing=KeyNotFound):
+                self.client.head_object(Bucket=self.bucket, Key=s3_key)
             return True
-        except ClientError as e:
-            if e.response["Error"]["Code"] in _MISSING:
-                return False
-            raise
+        except KeyNotFound:
+            return False
 
     def _list(self, at: tuple[str, ...] = ()) -> list[str]:
         """List keys under a prefix (scoped; the scope+prefix stripped back off)."""
         scoped_base = self._build_key(at=at)
         strip = (scoped_base + "/") if scoped_base else ""
-        paginator = self.client.get_paginator("list_objects_v2")
         out = []
-        for page in paginator.paginate(Bucket=self.bucket, Prefix=scoped_base):
-            for obj in page.get("Contents", []):
-                k = obj["Key"]
-                out.append(k[len(strip) :] if strip and k.startswith(strip) else k)
+        with self._errors(scoped_base):
+            paginator = self.client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=scoped_base):
+                for obj in page.get("Contents", []):
+                    k = obj["Key"]
+                    out.append(k[len(strip) :] if strip and k.startswith(strip) else k)
         return [p for p in out if p]
+
+    def _check(self) -> None:
+        """An identity resolves (locally, no request), then one ``HeadBucket``: the
+        bucket exists, in this region or at this endpoint, and the identity may use it."""
+        import boto3
+
+        if boto3.Session().get_credentials() is None:
+            raise StoreError(
+                f"no AWS credentials for the store s3://{self.bucket}: set AWS_PROFILE, "
+                "or export AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY "
+                '(for the dev garage: eval "$(cascade dev garage env)")'
+            )
+        with self._errors(""):
+            self.client.head_bucket(Bucket=self.bucket)
+
+    @contextmanager
+    def _errors(self, s3_key: str, missing: type[Exception] | None = None):
+        """botocore's failures as cascade's: an absent key as ``missing`` when the call
+        has one, anything else as a one-line :class:`StoreError` saying what to fix."""
+        from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
+
+        where = f"s3://{self.bucket}/{s3_key}" if s3_key else f"s3://{self.bucket}"
+        try:
+            yield
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if missing is not None and code in _MISSING:
+                raise missing(where) from None
+            if code in ("NoSuchBucket",) or (not s3_key and status == 404):
+                raise StoreError(f"{where}: no such bucket") from None
+            if code in ("AccessDenied", "403") or status == 403:
+                raise StoreError(
+                    f"{where}: access denied for this identity (check AWS_PROFILE and the "
+                    "bucket's permissions)"
+                ) from None
+            if status == 301 or code in ("PermanentRedirect", "AuthorizationHeaderMalformed"):
+                raise StoreError(
+                    f"{where}: the bucket is in another region than {self.region!r}"
+                ) from None
+            raise StoreError(f"{where}: {code}: {e.response['Error'].get('Message', '')}") from None
+        except NoCredentialsError:
+            raise StoreError(
+                f"{where}: no AWS credentials: set AWS_PROFILE, or export "
+                "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+            ) from None
+        except BotoCoreError as e:
+            raise StoreError(f"{where}: {e}") from None
 
     async def copy(
         self,
@@ -141,19 +182,13 @@ class S3Store(BlockingStore):
         to_: tuple[str, ...],
         dst_store: "S3Store",
     ) -> None:
-        from botocore.exceptions import ClientError
-
         src = self._build_key(src_key, from_)
-        try:
+        with self._errors(src, missing=KeyNotFound):
             self.client.copy_object(
                 Bucket=dst_store.bucket,
                 Key=dst_store._build_key(dst_key, to_),
                 CopySource={"Bucket": self.bucket, "Key": src},
             )
-        except ClientError as e:
-            if e.response["Error"]["Code"] in _MISSING:
-                raise KeyNotFound(f"s3://{self.bucket}/{src}") from None
-            raise
 
 
 _clients: dict[tuple[str | None, ...], Any] = {}

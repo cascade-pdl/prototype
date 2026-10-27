@@ -48,6 +48,14 @@ class KeyNotFound(LookupError):
     """
 
 
+class StoreError(Exception):
+    """The store cannot be used: no credentials, no bucket, no access, unreachable.
+
+    Not a missing key (that is :class:`KeyNotFound`) and not a bug in cascade: something
+    about the environment that the person running it can fix, so it is reported in one
+    line, with what to do where that is known."""
+
+
 class StoreConfig(ABC):
 
     scope: tuple[str, ...]
@@ -98,6 +106,12 @@ class Store(ABC):
 
     @abstractmethod
     async def list(self, at: tuple[str, ...] = ()) -> list[str]: ...
+
+    async def check(self) -> None:
+        """Raise :class:`StoreError` if this store cannot be used at all, as cheaply as
+        the backend allows. Called before a run starts anything, so a missing identity
+        or bucket fails in one line instead of after images are built. A backend with
+        nothing to check keeps this default."""
 
     # convenience JSON helpers
     async def put_json(self, key: str, obj: Any, at: tuple[str, ...] = ()) -> str:
@@ -263,6 +277,12 @@ class BlockingStore(Store):
 
     async def list(self, at: tuple[str, ...] = ()) -> list[str]:
         return await blocking(self._list, at)
+
+    async def check(self) -> None:
+        await blocking(self._check)
+
+    def _check(self) -> None:
+        """The synchronous :meth:`Store.check`; nothing to check by default."""
 
     @abstractmethod
     def _put(self, key: str, data: bytes, at: tuple[str, ...]) -> str: ...

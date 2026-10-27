@@ -219,3 +219,41 @@ async def test_a_spec_over_the_budget_is_refused_before_anything_runs(store, tmp
     assert "node 'big' (ref 'tool')" in str(e.value)
     assert "'small'" not in str(e.value)
     assert not (tmp_path / "wilder" / "r1").exists()  # nothing written, nothing started
+
+
+# --- the store is checked first --------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_a_store_that_cannot_be_used_fails_before_images_are_built(plan, monkeypatch):
+    """No identity or no bucket is reported in one line before anything slow starts."""
+    import cascade.executor.executor as executor_module
+    from cascade.store.base import StoreError
+    from tests.support.memory_store import MemoryStore
+
+    class Unusable(MemoryStore):
+        def _check(self):
+            raise StoreError("s3://b: no such bucket")
+
+    built = []
+
+    async def prepare(*args, **kwargs):
+        built.append(args)
+
+    monkeypatch.setattr(executor_module, "prepare_images", prepare)
+    with pytest.raises(ExecutorError, match="cannot use the store: s3://b: no such bucket"):
+        await Executor(plan, store=Unusable()).run(inputs={"src": "x"})
+    assert built == []
+
+
+@pytest.mark.asyncio
+async def test_a_store_error_during_the_run_is_one_line(plan, store, monkeypatch):
+    """Access narrower than the check could see (a read-only identity, say) surfaces at
+    the first write, as an ExecutorError rather than a traceback."""
+    from cascade.store.base import StoreError
+
+    def read_only(self, key, data, at=()):
+        raise StoreError("s3://b/k: access denied for this identity")
+
+    monkeypatch.setattr(FileStore, "_put", read_only)
+    with pytest.raises(ExecutorError, match="store: s3://b/k: access denied"):
+        await Executor(plan, store=store).run(inputs={"src": "x"})

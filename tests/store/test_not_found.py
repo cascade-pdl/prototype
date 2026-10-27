@@ -5,7 +5,7 @@ import boto3
 import pytest
 from botocore.stub import Stubber
 
-from cascade.store.base import KeyNotFound
+from cascade.store.base import KeyNotFound, StoreError
 from cascade.store.file_store import FileConfig, FileStore
 from cascade.store.s3_store import S3Config, S3Store
 from tests.support.memory_store import MemoryStore
@@ -98,12 +98,10 @@ async def test_s3_copy_missing_source():
 @pytest.mark.asyncio
 async def test_s3_other_errors_are_not_masked():
     """Access denied is not 'absent': hiding it would turn a permissions problem into a
-    confusing missing-input error."""
-    from botocore.exceptions import ClientError
-
+    confusing missing-input error. It is a ``StoreError`` saying so."""
     store, stub = _s3()
     stub.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403)
-    with stub, pytest.raises(ClientError):
+    with stub, pytest.raises(StoreError, match="access denied"):
         await store.get("k")
 
 

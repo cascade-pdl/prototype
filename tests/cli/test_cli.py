@@ -412,6 +412,30 @@ def test_a_failed_node_is_one_line_naming_the_instance(project, monkeypatch, cap
     assert "Traceback" not in err
 
 
+def test_an_s3_store_without_credentials_is_one_line_before_anything_runs(
+    echo_project, monkeypatch, capsys, tmp_path
+):
+    """The first real-S3 attempt: no identity in the shell. It used to surface as a
+    botocore traceback from the first write; now it is one line saying what to set."""
+    import os
+
+    for name in list(os.environ):
+        if name.startswith("AWS_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "none"))
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "none"))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    (echo_project / "deployment.yaml").write_text(
+        "name: s3\nstore: { kind: s3, config: { bucket: b, region: us-east-1 } }\n"
+    )
+    monkeypatch.chdir(echo_project)
+    assert main(["run", "pipeline.yaml", "--input", 'src="x"', "--run-id", "r1"]) == 2
+    err = capsys.readouterr().err
+    assert "cascade: error: cannot use the store: no AWS credentials" in err
+    assert "AWS_PROFILE" in err
+    assert "Traceback" not in err
+
+
 def test_run_rejects_a_malformed_input_flag(echo_project, monkeypatch, capsys):
     monkeypatch.chdir(echo_project)
     assert main(["run", "pipeline.yaml", "--input", "nonsense"]) == 2

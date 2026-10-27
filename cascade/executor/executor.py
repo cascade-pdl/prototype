@@ -43,7 +43,7 @@ from cascade.deployment import Deployment
 from cascade.docker.images import ImageConfig
 from cascade.docker.network import NetworkError, ensure_network
 from cascade.plan.plan import Plan
-from cascade.store.base import Store
+from cascade.store.base import Store, StoreError
 from cascade.store.registry import from_config
 from cascade.store.s3_store import S3Config
 
@@ -221,7 +221,13 @@ class Executor:
         inputs: Mapping[str, Any] | None = None,
         run_id: str | None = None,
     ) -> RunResult:
-        # images are built and resolved first, once for the whole run: a Dockerfile that
+        # the store first: no identity, no bucket or no access fails here, in one line,
+        # not after images are built and the first write is attempted
+        try:
+            await self._base.check()
+        except StoreError as e:
+            raise ExecutorError(f"cannot use the store: {e}") from None
+        # images are built and resolved next, once for the whole run: a Dockerfile that
         # does not build, or an image that is missing, fails before any task starts, and
         # no instance asks Docker anything before it runs
         try:
@@ -237,7 +243,12 @@ class Executor:
                 placements=self.placements, backends=self._backends, cwd=self.cwd,
                 images=images, limits=self.plan.limits, credentials=credentials,
             )
-            return await self._run(build_ref, images, inputs, run_id)
+            try:
+                return await self._run(build_ref, images, inputs, run_id)
+            except StoreError as e:
+                # the check passed, so this is access lost or narrower than it looked
+                # (e.g. read-only): still the environment, still one line
+                raise ExecutorError(f"store: {e}") from None
 
     async def _container_access(self, access: ExitStack) -> ContainerCredentials | None:
         """The network local containers join, made if missing, and with an S3 store the
