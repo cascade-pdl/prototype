@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 from cascade.protocol.binding import InputBindings, OutputDecls
@@ -11,13 +12,16 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any, Awaitable, Iterable, Iterator, Mapping, TypeVar
 
 from cascade.store.registry import decode as decode_store
 
 
 class NodeError(Exception):
     """The node could not do what a ref asked of it."""
+
+
+T = TypeVar("T")
 
 
 
@@ -34,7 +38,14 @@ interrupted mid-write. ``$`` is reserved for engine-owned names, so no port can 
 
 @dataclass
 class Node:
-    """One instance's view of the world: its identity, its data, and nothing else."""
+    """One instance's view of the world: its identity, its data, and nothing else.
+
+    Its methods are synchronous, for ref scripts that are plain programs; the store
+    underneath is async, so the node runs it on an event loop of its own, opened at the
+    first store call and closed when the context exits. Code already inside an event
+    loop cannot use them (one loop cannot run inside another): it awaits the stores
+    (``store_in``, ``store_out``) directly.
+    """
 
     name: str = ""
     run_id: str = ""
@@ -48,6 +59,7 @@ class Node:
     root: Path | None = None
     _written: list[str] = field(default_factory=list)
     _scratch: Path | None = None
+    _loop: asyncio.Runner | None = field(default=None, repr=False)
 
     # ------------------------------------------------------------------ inputs
     def has(self, port: str) -> bool:
@@ -62,7 +74,7 @@ class Node:
         binding = self._binding(port)
         if self.store_in is None:
             raise NodeError("no reader store: CASCADE_STORE_IN was not set")
-        value = self.store_in.read_json(binding.key, at=binding.scope)
+        value = self._sync(self.store_in.read_json(binding.key, at=binding.scope))
         self._check_shape(port, value, binding.depth)
         return value
 
@@ -71,7 +83,7 @@ class Node:
         binding = self._binding(port)
         if self.store_in is None:
             raise NodeError("no reader store: CASCADE_STORE_IN was not set")
-        return self.store_in.read(binding.key, at=binding.scope)
+        return self._sync(self.store_in.read(binding.key, at=binding.scope))
 
     def path(self, port: str) -> Path:
         """Stage one input to a local file and return its path.
@@ -111,18 +123,18 @@ class Node:
     # ----------------------------------------------------------------- outputs
     def write(self, port: str, value: Any) -> None:
         """Write a canonical value to an output port."""
-        self._out().put_json(self._declared(port).port, value)
+        self._sync(self._out().put_json(self._declared(port).port, value))
         self._written.append(port)
 
     def write_bytes(self, port: str, data: bytes) -> None:
-        self._out().put(self._declared(port).port, data)
+        self._sync(self._out().put(self._declared(port).port, data))
         self._written.append(port)
 
     def write_file(self, port: str, path: Path | str) -> None:
         """Take a file the tool produced and store it canonically."""
         decl = self._declared(port)
         raw = Path(path).read_bytes()
-        self._out().put_json(decl.port, decode(raw, decl.config.encoding))
+        self._sync(self._out().put_json(decl.port, decode(raw, decl.config.encoding)))
         self._written.append(port)
 
     def write_dir(self, port: str, path: Path | str, pattern: str = "*") -> None:
@@ -135,9 +147,9 @@ class Node:
         files = sorted(p for p in Path(path).glob(pattern) if p.is_file())
         if not files:
             raise NodeError(f"port {port!r}: no files matching {pattern!r} under {path}")
-        self._out().put_json(
+        self._sync(self._out().put_json(
             decl.port, [decode(f.read_bytes(), decl.config.encoding) for f in files]
-        )
+        ))
         self._written.append(port)
 
     def write_collection(self, port: str, items: Iterable[Any]) -> None:
@@ -151,13 +163,20 @@ class Node:
         # cannot have `dets` be both the descriptor and a directory of elements. The `$`
         # prefix is reserved for engine-owned names, so this cannot collide with a port.
         holder = (f"{ELEMENTS_PREFIX}{decl.port}",)
-        elements = []
-        for index, item in enumerate(items):
-            store.put_json("element", item, at=(*holder, str(index)))
-            elements.append(((*holder, str(index)), "element"))
-        store.write_collection(
-            decl.port, elements, element_type=decl.type.render() or None
-        )
+        items = list(items)
+        elements = [((*holder, str(index)), "element") for index in range(len(items))]
+
+        async def write() -> None:
+            await asyncio.gather(*(
+                store.put_json(key, item, at=scope)
+                for item, (scope, key) in zip(items, elements)
+            ))
+            # the descriptor last: it must never name an element not yet written
+            await store.write_collection(
+                decl.port, elements, element_type=decl.type.render() or None
+            )
+
+        self._sync(write())
         self._written.append(port)
 
     # -------------------------------------------------- files, for unmodified tools
@@ -231,10 +250,10 @@ class Node:
                 f"declared output port(s) never written: {missing} — "
                 f"wrote {self._written or 'nothing'}"
             )
-        self._out().put_json(
+        self._sync(self._out().put_json(
             DONE_MARKER,
             {"instance": self.instance_id, "ports": list(self.outputs.ports)},
-        )
+        ))
 
     def tempdir(self) -> Path:
         """A scratch directory, removed when the context exits."""
@@ -262,6 +281,22 @@ class Node:
                 f"(declared: {list(self.outputs.ports)})"
             )
         return decl
+
+    def _sync(self, call: Awaitable[T]) -> T:
+        """Run one store call to completion on the node's own loop."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            call.close()  # never started; closing it avoids a "never awaited" warning
+            raise NodeError(
+                "Node's methods are synchronous and cannot run inside an event loop; "
+                "await the store directly (e.g. `await node.store_in.read_json(...)`)"
+            )
+        if self._loop is None:
+            self._loop = asyncio.Runner()
+        return self._loop.run(call)
 
     def _out(self) -> Store:
         if self.store_out is None:
@@ -292,9 +327,14 @@ class Node:
         if self._scratch is not None:
             shutil.rmtree(self._scratch, ignore_errors=True)
             self._scratch = None
-        # the marker is written only on a clean exit -- a failed node must not look done
-        if exc_type is None:
-            self.done()
+        try:
+            # the marker is written only on a clean exit -- a failed node must not look done
+            if exc_type is None:
+                self.done()
+        finally:
+            if self._loop is not None:
+                self._loop.close()
+                self._loop = None
         return False
 
 

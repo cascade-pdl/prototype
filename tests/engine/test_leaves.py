@@ -85,9 +85,9 @@ class Recorder(RunnerCoroBase):
         return self.inner.run(spec)
 
 
-def _root(tmp_path) -> RunSpec:
+async def _root(tmp_path) -> RunSpec:
     store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main")))
-    store.put_json("src", "moths.wav", at=("$in",))
+    await store.put_json("src", "moths.wav", at=("$in",))
     return RunSpec(
         name="main", run_id="r1", instance_id="r1/main", store_out=store,
         inputs=InputBindings(inputs=(
@@ -108,7 +108,7 @@ async def test_each_leaf_is_a_launch_the_run_makes(tmp_path, monkeypatch):
         return Recorder(build(name, config, signature), seen)
 
     runner = DagRunner("main", plan, recording)
-    root = _root(tmp_path)
+    root = await _root(tmp_path)
     leaves = [spec for _runner, spec in runner.leaves(root)]
     assert await runner.run(root) == 0
 
@@ -120,16 +120,18 @@ async def test_each_leaf_is_a_launch_the_run_makes(tmp_path, monkeypatch):
         assert to_env(leaf) in launched, leaf.instance_id
 
 
-def test_listing_leaves_reads_and_writes_nothing(tmp_path):
+@pytest.mark.asyncio
+async def test_listing_leaves_reads_and_writes_nothing(tmp_path):
     plan = compile_pipeline(Pipeline.decode(safe_load(NESTED)))
-    root = _root(tmp_path)
+    root = await _root(tmp_path)
     before = sorted(p for p in tmp_path.rglob("*"))
     leaves = list(DagRunner("main", plan).leaves(root))
     assert len(leaves) == 4
     assert sorted(p for p in tmp_path.rglob("*")) == before
 
 
-def test_a_fan_leaf_assumes_the_widest_lane(tmp_path):
+@pytest.mark.asyncio
+async def test_a_fan_leaf_assumes_the_widest_lane(tmp_path):
     plan = compile_pipeline(Pipeline.decode(safe_load(NESTED)))
-    leaves = {s.node_id: s for _r, s in DagRunner("main", plan).leaves(_root(tmp_path))}
+    leaves = {s.node_id: s for _r, s in DagRunner("main", plan).leaves(await _root(tmp_path))}
     assert leaves["each"].instance_id == f"r1/main/each/{fan.WIDEST_LANE}"

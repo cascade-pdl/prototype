@@ -4,6 +4,7 @@ Each example is documentation and an end-to-end test at once, so it is run as sh
 from a copy of its directory, with only machine paths adjusted. Examples that need Docker
 or a built bundle (``bundle/build.sh``) are skipped when those are absent.
 """
+import asyncio
 import secrets
 import shutil
 import socket
@@ -80,7 +81,7 @@ def run(dest: Path, capsys, run_id: str, deployment: str = "deployment.yaml") ->
     for line in capsys.readouterr().out.splitlines()[1:]:
         port, _, path = line.strip().partition(": ")
         *scope, key = path.split("/")
-        values[port] = store.read_json(key, at=tuple(scope))
+        values[port] = asyncio.run(store.read_json(key, at=tuple(scope)))
     return values
 
 
@@ -91,7 +92,7 @@ def test_docker_raw_runs_stock_images_wrapped_by_the_bundle(tmp_path, monkeypatc
     assert run(dest, capsys, "t1") == {"result": [1, 2, 3, 4, 5]}
     # the run records the image each ref actually ran, by id
     record = FileStore(FileConfig(root=str(dest / "_store"), scope=("docker-raw", "t1")))
-    images = record.get_json("images")
+    images = asyncio.run(record.get_json("images"))
     assert set(images) == {"gen", "add-one"}
     assert images["gen"]["id"].startswith("sha256:")
 

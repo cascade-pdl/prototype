@@ -3,6 +3,7 @@
 Run as a real process with the real env contract, because what is under test is process
 behaviour: exit codes, signals, and what is in the store afterwards.
 """
+import asyncio
 import json
 import os
 import signal
@@ -32,7 +33,7 @@ UPPER = (
 def stores(tmp_path):
     base = FileConfig(root=str(tmp_path / "store"), scope=("r1", "main"))
     reader, writer = FileStore(base), FileStore(base.subscope(("upper",)))
-    reader.put_json("text", "hello", at=("src",))
+    asyncio.run(reader.put_json("text", "hello", at=("src",)))
     return reader, writer
 
 
@@ -75,8 +76,8 @@ def test_inputs_are_staged_the_command_runs_and_outputs_are_collected(stores, ro
     r = wrap(env, *python(UPPER.format(root=str(root))))
     assert r.returncode == 0, r.stderr
     _, writer = stores
-    assert json.loads(writer.get("upper")) == "HELLO"
-    assert writer.has(DONE_MARKER)
+    assert json.loads(asyncio.run(writer.get("upper"))) == "HELLO"
+    assert asyncio.run(writer.has(DONE_MARKER))
 
 
 def test_a_failing_command_passes_its_code_through_and_marks_nothing(stores, root, env):
@@ -85,15 +86,15 @@ def test_a_failing_command_passes_its_code_through_and_marks_nothing(stores, roo
     assert r.returncode == 7
     _, writer = stores
     # the output file was written, but a failed node's outputs are not collected
-    assert not writer.has("upper")
-    assert not writer.has(DONE_MARKER)
+    assert not asyncio.run(writer.has("upper"))
+    assert not asyncio.run(writer.has(DONE_MARKER))
 
 
 def test_a_missing_command_reads_as_a_shell_would_report_it(stores, env):
     r = wrap(env, "no-such-tool-anywhere")
     assert r.returncode == COMMAND_NOT_FOUND
     assert "cascade node wrap: cannot run 'no-such-tool-anywhere'" in r.stderr
-    assert not stores[1].has(DONE_MARKER)
+    assert not asyncio.run(stores[1].has(DONE_MARKER))
 
 
 def test_a_staging_failure_never_runs_the_command(stores, tmp_path, env):
@@ -103,7 +104,7 @@ def test_a_staging_failure_never_runs_the_command(stores, tmp_path, env):
     assert r.returncode == PRE_HOOKS_FAILED, r.stderr
     assert "cascade node wrap: staging inputs failed" in r.stderr
     assert not ran.exists()
-    assert not stores[1].has(DONE_MARKER)
+    assert not asyncio.run(stores[1].has(DONE_MARKER))
 
 
 def test_a_command_that_writes_no_declared_output_fails_collection(stores, env):
@@ -111,7 +112,7 @@ def test_a_command_that_writes_no_declared_output_fails_collection(stores, env):
     assert r.returncode == POST_HOOKS_FAILED
     assert "cascade node wrap: collecting outputs failed" in r.stderr
     assert "/outputs/upper" in r.stderr
-    assert not stores[1].has(DONE_MARKER)
+    assert not asyncio.run(stores[1].has(DONE_MARKER))
 
 
 def test_nothing_to_run_is_a_usage_error(env):
@@ -152,7 +153,7 @@ def test_a_stop_signal_reaches_the_command(stores, tmp_path, env, signum):
         proc.kill()
         proc.wait()
     assert heard.read_text() == str(int(signum))
-    assert not stores[1].has(DONE_MARKER)
+    assert not asyncio.run(stores[1].has(DONE_MARKER))
 
 
 @pytest.mark.skipif(posix_only, reason="POSIX signals")

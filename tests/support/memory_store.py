@@ -13,10 +13,10 @@ need the ``{kind, config}`` envelope use a registered backend (``FileStore``).
 """
 from __future__ import annotations
 
-from cascade.store.base import KeyNotFound, Store
+from cascade.store.base import BlockingStore, KeyNotFound
 
 
-class MemoryStore(Store):
+class MemoryStore(BlockingStore):
     def __init__(self, scope: tuple[str, ...] = ()) -> None:
         self.scope = tuple(scope)
         self._data: dict[str, bytes] = {}
@@ -25,20 +25,20 @@ class MemoryStore(Store):
         parts = [p for p in (*self.scope, *at, key) if p]
         return "/".join(parts)
 
-    def put(self, key: str, data: bytes, at: tuple[str, ...] = ()) -> str:
+    def _put(self, key: str, data: bytes, at: tuple[str, ...] = ()) -> str:
         self._data[self._key(key, at)] = data
         return key
 
-    def get(self, key: str, at: tuple[str, ...] = ()) -> bytes:
+    def _get(self, key: str, at: tuple[str, ...] = ()) -> bytes:
         try:
             return self._data[self._key(key, at)]
         except KeyError:
             raise KeyNotFound(self._key(key, at)) from None
 
-    def has(self, key: str, at: tuple[str, ...] = ()) -> bool:
+    def _has(self, key: str, at: tuple[str, ...] = ()) -> bool:
         return self._key(key, at) in self._data
 
-    def list(self, at: tuple[str, ...] = ()) -> list[str]:
+    def _list(self, at: tuple[str, ...] = ()) -> list[str]:
         """Keys under the scoped base, returned relative to it (mirrors the real
         backends, which strip scope+prefix back off)."""
         base = self._key(None, at)

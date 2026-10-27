@@ -29,8 +29,9 @@ so a lane waiting for one is just a coroutine waiting inside its leaf.
 """
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any, Awaitable, Iterator, Mapping
+from typing import Awaitable, Iterator, Mapping
 
 from cascade.engine.concurrency import run_all
 from cascade.protocol.binding import INPUTS_SCOPE, InputBinding, InputBindings
@@ -131,15 +132,15 @@ class FanRunner(RunnerCoroBase):
         if code != 0:
             raise FanError(f"{spec.instance_id}: exited {code}")
 
-    def _elements(self, spec: RunSpec) -> list[tuple[tuple[str, ...], str]]:
+    async def _elements(self, spec: RunSpec) -> list[tuple[tuple[str, ...], str]]:
         """Where each lane's element is, as ``(scope, key)`` in the lanes' reader.
 
         A descriptor's element scopes are relative to the descriptor, so prefixing the
         binding's scope makes them relative to the reader. A monolithic collection is
-        split here, one staged object per element: one read, ``N`` writes.
+        split here, one staged object per element: one read, ``N`` writes, all at once.
         """
         binding = self._scatter_binding(spec)
-        raw = spec.store_in.get(binding.key, at=binding.scope)
+        raw = await spec.store_in.get(binding.key, at=binding.scope)
         if descriptor := CollectionDescriptor.try_decode(raw):
             return [((*binding.scope, *scope), key) for scope, key in descriptor.elements]
         values = json.loads(raw.decode("utf-8"))
@@ -148,8 +149,10 @@ class FanRunner(RunnerCoroBase):
                 f"node scatters over {self.scatter_port!r}, but "
                 f"{'/'.join((*binding.scope, binding.key))} is not a collection"
             )
-        for index, value in enumerate(values):
+        await asyncio.gather(*(
             spec.store_out.put_json(self.scatter_port, value, at=(str(index), SCATTER_INPUT))
+            for index, value in enumerate(values)
+        ))
         return [self._staged_element(spec, index) for index in range(len(values))]
 
     def _staged_element(self, spec: RunSpec, index: int) -> tuple[tuple[str, ...], str]:
@@ -182,17 +185,17 @@ class FanRunner(RunnerCoroBase):
         path = InstancePath.parse(spec.instance_id or spec.run_id)
         lanes = [
             self._lane_spec(spec, path, index, element)
-            for index, element in enumerate(self._elements(spec))
+            for index, element in enumerate(await self._elements(spec))
         ]
 
         # lane i stays element i because each lane writes beneath its own index, not
         # because of completion order; run_all decides what a failure does (fail fast)
         await run_all(self._run_lane(s) for s in lanes)
 
-        self._gather(spec, len(lanes))
+        await self._gather(spec, len(lanes))
         return 0
 
-    def _gather(self, spec: RunSpec, width: int) -> None:
+    async def _gather(self, spec: RunSpec, width: int) -> None:
         """Close the fan: one artifact per output port, at the node's own scope.
 
         Written as a **descriptor** — the lanes' outputs stay where they are and the
@@ -203,11 +206,11 @@ class FanRunner(RunnerCoroBase):
         for port, (inner_scope, inner_key) in self.outputs.items():
             lanes = [((str(i), *inner_scope), inner_key) for i in range(width)]
             if self.merge == "flatten":
-                self._flatten(spec, port, lanes)
+                await self._flatten(spec, port, lanes)
             else:
-                spec.store_out.write_collection(port, lanes)
+                await spec.store_out.write_collection(port, lanes)
 
-    def _flatten(
+    async def _flatten(
         self,
         spec: RunSpec,
         port: str,
@@ -224,18 +227,16 @@ class FanRunner(RunnerCoroBase):
         fall back to reading and concatenating values — the one case where flattening
         costs what it looks like it costs.
         """
-        merged: list[tuple[tuple[str, ...], str]] = []
-        for scope, key in lanes:
-            descriptor = CollectionDescriptor.try_decode(spec.store_out.get(key, at=scope))
-            if descriptor is None:
-                # at least one lane is monolithic: concatenate values instead
-                values: list[Any] = []
-                for s, k in lanes:
-                    values.extend(spec.store_out.read_json(k, at=s))
-                spec.store_out.put_json(port, values)
-                return
-            merged.extend(
-                ((*scope, *element_scope), element_key)
-                for element_scope, element_key in descriptor.elements
-            )
-        spec.store_out.write_collection(port, merged)
+        raws = await asyncio.gather(*(spec.store_out.get(key, at=scope) for scope, key in lanes))
+        descriptors = [CollectionDescriptor.try_decode(raw) for raw in raws]
+        if any(d is None for d in descriptors):
+            # at least one lane is monolithic: concatenate values instead
+            parts = await asyncio.gather(*(spec.store_out.read_json(k, at=s) for s, k in lanes))
+            await spec.store_out.put_json(port, [v for part in parts for v in part])
+            return
+        merged = [
+            ((*scope, *element_scope), element_key)
+            for (scope, _key), descriptor in zip(lanes, descriptors)
+            for element_scope, element_key in descriptor.elements
+        ]
+        await spec.store_out.write_collection(port, merged)

@@ -4,6 +4,7 @@ the deployment, or from ``--backend`` flags) before doing anything."""
 from __future__ import annotations
 
 import argparse
+import asyncio
 from pathlib import Path
 
 from cascade.cli.errors import CliError
@@ -16,7 +17,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
     if not src.is_file():
         raise CliError(f"not a file: {src}")
     store = build_store(args)
-    store.put(args.key, src.read_bytes(), at=at_tuple(args))
+    asyncio.run(store.put(args.key, src.read_bytes(), at=at_tuple(args)))
     print(f"staged {src} -> {args.key}")
     return 0
 
@@ -25,7 +26,7 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     store = build_store(args)
     at = at_tuple(args)
     try:
-        data = store.get(args.key, at=at)
+        data = asyncio.run(store.get(args.key, at=at))
     except KeyNotFound:
         raise CliError(f"key not found in store: {args.key}")
     dst = Path(args.dest)
@@ -44,15 +45,21 @@ def cmd_stage_dir(args: argparse.Namespace) -> int:
     files = sorted(p for p in root.rglob("*") if p.is_file())
     if not files:
         raise CliError(f"no files under {root}")
-    for f in files:
-        key = f.relative_to(root).as_posix()  # posix keys, stable across OSes
-        store.put(key, f.read_bytes(), at=at)
+
+    async def stage() -> None:
+        await asyncio.gather(*(
+            # posix keys, stable across OSes
+            store.put(f.relative_to(root).as_posix(), f.read_bytes(), at=at)
+            for f in files
+        ))
+
+    asyncio.run(stage())
     print(f"staged {len(files)} file(s) from {root}")
     return 0
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    keys = build_store(args).list(at=at_tuple(args))
+    keys = asyncio.run(build_store(args).list(at=at_tuple(args)))
     for k in sorted(keys):
         print(k)
     return 0

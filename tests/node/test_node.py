@@ -5,6 +5,7 @@ Everything here is exercised through the real env contract — the same variable
 implementation of it. If a test reached inside instead, it would be testing the
 implementation rather than the thing a Rust ref would have to reimplement.
 """
+import asyncio
 import json
 
 import pytest
@@ -32,7 +33,7 @@ def stores(tmp_path):
 @pytest.fixture
 def spec(stores):
     reader, writer = stores
-    reader.put_json("images", [{"id": i} for i in range(3)], at=("list",))
+    asyncio.run(reader.put_json("images", [{"id": i} for i in range(3)], at=("list",)))
     return RunSpec(
         name="detect",
         run_id="r1",
@@ -98,8 +99,8 @@ def test_read_resolves_a_distributed_collection(spec, stores, tmp_path):
     reader, _ = stores
     # element scopes are relative to the descriptor's own location, which is ("list",)
     for i in range(2):
-        reader.put_json("e", {"id": i}, at=("list", "fan", str(i)))
-    reader.write_collection("images", [(("fan", "0"), "e"), (("fan", "1"), "e")], at=("list",))
+        asyncio.run(reader.put_json("e", {"id": i}, at=("list", "fan", str(i))))
+    asyncio.run(reader.write_collection("images", [(("fan", "0"), "e"), (("fan", "1"), "e")], at=("list",)))
     n = from_env(_env(spec, tmp_path))
     assert n.read("images") == [{"id": 0}, {"id": 1}]
 
@@ -113,7 +114,7 @@ def test_an_unbound_port_names_what_is_bound(env):
 def test_a_shape_mismatch_fails_at_the_node(spec, stores, tmp_path):
     """The declared depth is what turns a silent misread into an error."""
     reader, _ = stores
-    reader.put_json("images", {"not": "a list"}, at=("list",))
+    asyncio.run(reader.put_json("images", {"not": "a list"}, at=("list",)))
     n = from_env(_env(spec, tmp_path))
     with pytest.raises(NodeError, match="declared 1-dimensional"):
         n.read("images")
@@ -134,7 +135,7 @@ def test_dir_zero_pads_so_filename_order_is_element_order(spec, stores, tmp_path
     """A directory carries no order, and a tool that sorts its inputs would otherwise
     scramble the correspondence the gather depends on: '10' sorts before '2'."""
     reader, _ = stores
-    reader.put_json("images", [{"id": i} for i in range(11)], at=("list",))
+    asyncio.run(reader.put_json("images", [{"id": i} for i in range(11)], at=("list",)))
     n = from_env(_env(spec, tmp_path))
     names = sorted(p.name for p in n.dir("images").iterdir())
     assert names[:2] == ["00.json", "01.json"]
@@ -143,7 +144,7 @@ def test_dir_zero_pads_so_filename_order_is_element_order(spec, stores, tmp_path
 
 def test_path_stages_a_single_value(spec, stores, tmp_path):
     reader, _ = stores
-    reader.put_json("images", {"only": "one"}, at=("list",))
+    asyncio.run(reader.put_json("images", {"only": "one"}, at=("list",)))
     spec.inputs = InputBindings(
         (InputBinding("images", ("list",), "images", TypeExpr.parse("Image")),)
     )
@@ -153,7 +154,7 @@ def test_path_stages_a_single_value(spec, stores, tmp_path):
 
 def test_dir_refuses_a_scalar_port(spec, stores, tmp_path):
     reader, _ = stores
-    reader.put_json("images", {"only": "one"}, at=("list",))
+    asyncio.run(reader.put_json("images", {"only": "one"}, at=("list",)))
     spec.inputs = InputBindings(
         (InputBinding("images", ("list",), "images", TypeExpr.parse("Image")),)
     )
@@ -168,7 +169,7 @@ def test_write_stores_a_canonical_value(stores, env):
     _, writer = stores
     n = from_env(env)
     n.write("dets", [{"conf": 0.9}])
-    assert writer.read_json("dets") == [{"conf": 0.9}]
+    assert asyncio.run(writer.read_json("dets")) == [{"conf": 0.9}]
 
 
 def test_write_dir_collects_a_directory_in_filename_order(stores, env):
@@ -178,7 +179,7 @@ def test_write_dir_collects_a_directory_in_filename_order(stores, env):
     for i in range(3):
         (out / f"{i}.json").write_text(json.dumps({"i": i}))
     n.write_dir("dets", out)
-    assert writer.read_json("dets") == [{"i": 0}, {"i": 1}, {"i": 2}]
+    assert asyncio.run(writer.read_json("dets")) == [{"i": 0}, {"i": 1}, {"i": 2}]
 
 
 def test_write_collection_uses_the_distributed_form(stores, env):
@@ -186,8 +187,8 @@ def test_write_collection_uses_the_distributed_form(stores, env):
     _, writer = stores
     n = from_env(env)
     n.write_collection("dets", [{"i": 0}, {"i": 1}])
-    assert writer.is_collection("dets")
-    assert writer.read_json("dets") == [{"i": 0}, {"i": 1}]
+    assert asyncio.run(writer.is_collection("dets"))
+    assert asyncio.run(writer.read_json("dets")) == [{"i": 0}, {"i": 1}]
 
 
 def test_writing_an_undeclared_port_is_refused(env):
@@ -209,7 +210,7 @@ def test_a_clean_exit_writes_the_marker_last(stores, env):
     n = from_env(env)
     with n:
         n.write("dets", [])
-    assert writer.get_json(DONE_MARKER) == {
+    assert asyncio.run(writer.get_json(DONE_MARKER)) == {
         "instance": "r1/main/detect",
         "ports": ["dets"],
     }
@@ -224,8 +225,8 @@ def test_a_failing_ref_leaves_no_marker(stores, env):
         with n:
             n.write("dets", [])
             raise RuntimeError("model crashed")
-    assert writer.has("dets")
-    assert not writer.has(DONE_MARKER)
+    assert asyncio.run(writer.has("dets"))
+    assert not asyncio.run(writer.has(DONE_MARKER))
 
 
 def test_forgetting_a_declared_port_fails_rather_than_marking_done(stores, env):
@@ -234,7 +235,7 @@ def test_forgetting_a_declared_port_fails_rather_than_marking_done(stores, env):
     with pytest.raises(NodeError, match="never written"):
         with n:
             pass
-    assert not writer.has(DONE_MARKER)
+    assert not asyncio.run(writer.has(DONE_MARKER))
 
 
 def test_the_scratch_directory_is_cleaned_up(env):
@@ -287,7 +288,7 @@ def test_session_writes_the_marker_on_a_clean_exit(stores, env):
     _, writer = stores
     with session(env) as n:
         n.write("dets", [{"conf": 0.9}])
-    assert writer.has(DONE_MARKER)
+    assert asyncio.run(writer.has(DONE_MARKER))
 
 
 def test_session_skips_the_marker_when_the_body_raises(stores, env):
@@ -298,8 +299,8 @@ def test_session_skips_the_marker_when_the_body_raises(stores, env):
         with session(env) as n:
             n.write("dets", [])
             raise RuntimeError("model crashed")
-    assert writer.has("dets")
-    assert not writer.has(DONE_MARKER)
+    assert asyncio.run(writer.has("dets"))
+    assert not asyncio.run(writer.has(DONE_MARKER))
 
 
 def test_session_accepts_os_environ(spec, tmp_path):
@@ -340,8 +341,8 @@ def test_collect_outputs_stores_a_directory_as_a_collection_then_marks_done(stor
     for i in range(2):
         (produced / f"{i}.json").write_text(json.dumps({"score": i}))
     assert n.collect_outputs() == [("dets", produced)]
-    assert writer.get_json("dets") == [{"score": 0}, {"score": 1}]
-    assert writer.has(DONE_MARKER)
+    assert asyncio.run(writer.get_json("dets")) == [{"score": 0}, {"score": 1}]
+    assert asyncio.run(writer.has(DONE_MARKER))
 
 
 def test_collect_outputs_stores_a_file_as_one_value(stores, env):
@@ -350,8 +351,8 @@ def test_collect_outputs_stores_a_file_as_one_value(stores, env):
     n.outputs_dir.mkdir(parents=True)
     (n.outputs_dir / "dets").write_text(json.dumps([{"score": 1}]))
     n.collect_outputs()
-    assert writer.get_json("dets") == [{"score": 1}]
-    assert writer.has(DONE_MARKER)
+    assert asyncio.run(writer.get_json("dets")) == [{"score": 1}]
+    assert asyncio.run(writer.has(DONE_MARKER))
 
 
 def test_a_missing_output_is_named_and_leaves_no_marker(stores, env):
@@ -359,7 +360,7 @@ def test_a_missing_output_is_named_and_leaves_no_marker(stores, env):
     n = from_env(env)
     with pytest.raises(NodeError, match=r"'dets' not found at .*/outputs/dets"):
         n.collect_outputs()
-    assert not writer.has(DONE_MARKER)
+    assert not asyncio.run(writer.has(DONE_MARKER))
 
 
 def test_collecting_with_no_declared_outputs_is_refused(spec, tmp_path):

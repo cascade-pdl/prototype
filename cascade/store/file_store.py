@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Self
 from dataclasses import dataclass, asdict, replace
 
-from cascade.store.base import KeyNotFound, Store, StoreConfig
+from cascade.store.base import BlockingStore, KeyNotFound, StoreConfig
 
 
 @dataclass
@@ -27,7 +27,7 @@ class FileConfig(StoreConfig):
         return cls(scope=scope, **raw)
 
 
-class FileStore(Store):
+class FileStore(BlockingStore):
     """A local directory store. Scope is realised as nested path segments under
     ``root`` — but that's this backend's private choice, not the contract.
 
@@ -51,7 +51,7 @@ class FileStore(Store):
             parts.append(key)
         return self.root.joinpath(*parts)
 
-    def put(
+    def _put(
         self,
         key: str,
         data: bytes,
@@ -62,7 +62,7 @@ class FileStore(Store):
         p.write_bytes(data)
         return key
 
-    def get(
+    def _get(
         self,
         key: str,
         at: tuple[str, ...] = (),
@@ -73,10 +73,10 @@ class FileStore(Store):
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
             raise KeyNotFound(str(path)) from None
 
-    def has(self, key: str, at: tuple[str, ...] = ()) -> bool:
+    def _has(self, key: str, at: tuple[str, ...] = ()) -> bool:
         return self._build_path(key, at).is_file()
 
-    def list(self, at: tuple[str, ...] = ()) -> list[str]:
+    def _list(self, at: tuple[str, ...] = ()) -> list[str]:
         """List keys under a prefix (relative to the scoped root)."""
         base = self._build_path(at=at)
         if not base.exists():

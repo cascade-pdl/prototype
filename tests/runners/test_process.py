@@ -109,8 +109,8 @@ async def test_a_wrapped_command_reads_and_writes_files_under_its_own_root(tmp_p
     store, spec = _spec(tmp_path)
     cmd, seen = _tool(tmp_path)
     assert await RunnerSubprocess(cmd=cmd, cwd=str(tmp_path), wrap=True).run(spec) == 0
-    assert store.get_json("o") == 7
-    assert store.has(DONE_MARKER)
+    assert await store.get_json("o") == 7
+    assert await store.has(DONE_MARKER)
     assert not os.path.exists(seen.read_text())  # the staging root is removed afterwards
 
 
@@ -119,7 +119,7 @@ async def test_a_failed_wrapped_command_marks_nothing_and_still_tidies_up(tmp_pa
     store, spec = _spec(tmp_path)
     cmd, seen = _tool(tmp_path, exit_code=4)
     assert await RunnerSubprocess(cmd=cmd, cwd=str(tmp_path), wrap=True).run(spec) == 4
-    assert not store.has(DONE_MARKER)
+    assert not await store.has(DONE_MARKER)
     assert not os.path.exists(seen.read_text())
 
 

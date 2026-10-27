@@ -32,6 +32,7 @@ What it owns is everything that is true once per run rather than once per node:
 """
 from __future__ import annotations
 
+import asyncio
 import secrets
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -91,7 +92,7 @@ class RunResult:
     outputs: dict[str, tuple[tuple[str, ...], str]] = field(default_factory=dict)
     store: Store | None = None
 
-    def fetch(self, port: str) -> Any:
+    async def fetch(self, port: str) -> Any:
         """The value of one declared output. Resolves the alias, so the caller never
         needs to know which inner node actually produced it."""
         if port not in self.outputs:
@@ -101,7 +102,7 @@ class RunResult:
         scope, key = self.outputs[port]
         # read, not get_json: a gathered port is a collection descriptor, and the caller
         # should not have to know whether it was materialised or left in place
-        return self.store.read_json(key, at=scope)
+        return await self.store.read_json(key, at=scope)
 
 
 def _live(config) -> Store:
@@ -188,9 +189,10 @@ class Executor:
         )
 
     @staticmethod
-    def _stage_inputs(dag_store: Store, inputs: Mapping[str, Any]) -> None:
-        for port, value in inputs.items():
-            dag_store.put_json(port, value, at=(RUN_INPUTS,))
+    async def _stage_inputs(dag_store: Store, inputs: Mapping[str, Any]) -> None:
+        await asyncio.gather(*(
+            dag_store.put_json(port, value, at=(RUN_INPUTS,)) for port, value in inputs.items()
+        ))
 
     @staticmethod
     def _check_spec_sizes(runner: Runner, spec: RunSpec) -> None:
@@ -276,14 +278,15 @@ class Executor:
         self._check_spec_sizes(runner, spec)
 
         # a completed run is self-describing: the graph sits beside the data
-        run_store.put_json(PLAN_KEY, self.plan.encode())
-        run_store.put_json(PLACEMENT_KEY, self.placements.encode())
-        # which image each docker ref actually ran: a tag can move, an id cannot
-        run_store.put_json(
-            IMAGES_KEY, {ref: {"id": image.id} for ref, image in sorted(images.items())}
+        await asyncio.gather(
+            run_store.put_json(PLAN_KEY, self.plan.encode()),
+            run_store.put_json(PLACEMENT_KEY, self.placements.encode()),
+            # which image each docker ref actually ran: a tag can move, an id cannot
+            run_store.put_json(
+                IMAGES_KEY, {ref: {"id": image.id} for ref, image in sorted(images.items())}
+            ),
+            self._stage_inputs(dag_store, inputs),
         )
-
-        self._stage_inputs(dag_store, inputs)
 
         code = await runner.run(spec)
         if code != 0:

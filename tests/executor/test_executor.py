@@ -95,7 +95,7 @@ async def test_executes_a_pipeline_and_reports_its_outputs(plan, store, tmp_path
     assert result.outputs == {"result": (("score",), "scored")}
 
     # fetch resolves the alias, so the caller never learns which node produced it
-    assert isinstance(result.fetch("result"), list)
+    assert isinstance(await result.fetch("result"), list)
 
 
 @pytest.mark.asyncio
@@ -168,7 +168,7 @@ async def test_the_store_comes_from_the_deployment(plan, tmp_path):
         inputs={"src": "x"}, run_id="r1"
     )
     assert (tmp_path / "wilder" / "moth" / "r1" / "main" / "score" / "scored").is_file()
-    assert result.fetch("result") is not None
+    assert await result.fetch("result") is not None
 
 
 @pytest.mark.asyncio
@@ -182,7 +182,7 @@ async def test_execute_is_a_one_shot_convenience(plan, store):
 async def test_fetching_an_undeclared_port_is_an_error(plan, store):
     result = await Executor(plan, store=store).run(inputs={"src": "x"})
     with pytest.raises(ExecutorError, match="no output port"):
-        result.fetch("nope")
+        await result.fetch("nope")
 
 # --- the spec budget -----------------------------------------------------------
 

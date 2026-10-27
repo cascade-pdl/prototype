@@ -30,6 +30,7 @@ no per-node result to record — an output always lives at its node's name.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from typing import Awaitable, Iterator
 
@@ -200,18 +201,20 @@ class DagRunner(RunnerCoroBase):
             inputs=tuple(replace(b, scope=(INPUTS_SCOPE,), key=b.port) for b in bindings.inputs)
         )
 
-    def _stage_inputs(self, spec: RunSpec) -> InputBindings:
+    async def _stage_inputs(self, spec: RunSpec) -> InputBindings:
         """Copy each bound input into this dag's ``$in`` and rebind it there."""
         staged = self._staged(spec)
         if staged is spec.inputs or not staged.inputs:
             return staged
         if spec.store_out is None:
             raise DagRunError(f"dag {self.dag!r} has inputs to stage but no writer store")
-        for b, to in zip(spec.inputs.inputs, staged.inputs):
-            if not _same_location(spec.store_in, b.scope, b.key, spec.store_out, to.scope, to.key):
-                spec.store_in.copy_resolved(
-                    b.key, to.key, from_=b.scope, to_=to.scope, dst_store=spec.store_out
-                )
+        await asyncio.gather(*(
+            spec.store_in.copy_resolved(
+                b.key, to.key, from_=b.scope, to_=to.scope, dst_store=spec.store_out
+            )
+            for b, to in zip(spec.inputs.inputs, staged.inputs)
+            if not _same_location(spec.store_in, b.scope, b.key, spec.store_out, to.scope, to.key)
+        ))
         return staged
 
     def leaves(self, spec: RunSpec) -> Iterator[tuple[Runner, RunSpec]]:
@@ -230,7 +233,7 @@ class DagRunner(RunnerCoroBase):
     async def _run_dag(self, spec: RunSpec) -> int:
         graph = self.graph
         path = InstancePath.parse(spec.instance_id or spec.run_id)
-        dag_inputs = self._stage_inputs(spec)
+        dag_inputs = await self._stage_inputs(spec)
 
         for wave in graph.waves():
             dispatches = [

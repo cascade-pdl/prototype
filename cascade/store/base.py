@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Self, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from typing import Any, Callable, Self, Sequence, TypeVar
 
 from cascade.store.collection import (
     MAX_DEPTH,
@@ -14,6 +17,26 @@ from cascade.store.collection import (
 ELEMENTS = "$el"
 """Where ``copy_resolved`` puts a copied collection's elements. ``$`` marks an
 engine-owned name, so no declared port can collide with it."""
+
+MAX_IN_FLIGHT = 32
+"""How many blocking store calls one process has in flight at once, across every store
+instance and event loop in it. Each costs a round trip (on S3 from a laptop, ~140 ms a GET and
+~240 ms a PUT), so overlapping them is where the time goes; bounding them keeps a
+10,000-element collection from opening 10,000 connections."""
+
+_CALLS = ThreadPoolExecutor(MAX_IN_FLIGHT, thread_name_prefix="cascade-store")
+"""The threads blocking store calls run in. Its size is the bound: calls beyond it
+queue. One pool for the process rather than one per loop or per store, so nested
+concurrency (a collection's elements, inside lanes copying in parallel) cannot multiply
+it. Store calls never wait on other store calls from inside a thread, so the queue
+cannot deadlock."""
+
+T = TypeVar("T")
+
+
+async def blocking(fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
+    """Run a blocking call in the store's threads, so the event loop keeps running."""
+    return await asyncio.get_running_loop().run_in_executor(_CALLS, partial(fn, *args, **kwargs))
 
 
 class KeyNotFound(LookupError):
@@ -50,33 +73,40 @@ class Store(ABC):
     scope (a path prefix, an S3 key prefix, a DynamoDB partition value, a table)
     is each store's private business and never part of this contract. Callers
     only ever pass logical keys and abstract scope fragments.
+
+    **The API is async, and an async method never blocks.** The executor runs every
+    dag, fan and lane on one event loop, so a store call that blocked it would stall
+    all of them for a round trip. A backend with an async client implements the four
+    primitives below directly; one whose client blocks subclasses
+    :class:`BlockingStore`, which runs its synchronous primitives in the store's
+    threads. Everything else here is built on the four.
     """
 
     config: StoreConfig
 
     @abstractmethod
-    def put(self, key: str, data: bytes, at: tuple[str, ...] = ()) -> str: ...
+    async def put(self, key: str, data: bytes, at: tuple[str, ...] = ()) -> str: ...
 
     @abstractmethod
-    def get(self, key: str, at: tuple[str, ...] = ()) -> bytes:
+    async def get(self, key: str, at: tuple[str, ...] = ()) -> bytes:
         """The bytes at ``key``; :class:`KeyNotFound` if there are none."""
 
     @abstractmethod
-    def has(self, key: str, at: tuple[str, ...] = ()) -> bool:
+    async def has(self, key: str, at: tuple[str, ...] = ()) -> bool:
         """Whether ``get`` would succeed. A prefix that only has keys beneath it is not a
         key: S3 has no directories, so a file store must not report them either."""
 
     @abstractmethod
-    def list(self, at: tuple[str, ...] = ()) -> list[str]: ...
+    async def list(self, at: tuple[str, ...] = ()) -> list[str]: ...
 
     # convenience JSON helpers
-    def put_json(self, key: str, obj: Any, at: tuple[str, ...] = ()) -> str:
-        return self.put(key, json.dumps(obj).encode("utf-8"), at=at)
+    async def put_json(self, key: str, obj: Any, at: tuple[str, ...] = ()) -> str:
+        return await self.put(key, json.dumps(obj).encode("utf-8"), at=at)
 
-    def get_json(self, key: str, at: tuple[str, ...] = ()) -> Any:
-        return json.loads(self.get(key, at=at).decode("utf-8"))
+    async def get_json(self, key: str, at: tuple[str, ...] = ()) -> Any:
+        return json.loads((await self.get(key, at=at)).decode("utf-8"))
 
-    def copy(
+    async def copy(
         self,
         src_key: str,
         dst_key: str,
@@ -86,13 +116,13 @@ class Store(ABC):
     ) -> str:
         """Copy a key to another store."""
         dst_store = dst_store or self
-        return dst_store.put(
+        return await dst_store.put(
             key=dst_key,
-            data=self.get(key=src_key, at=from_),
+            data=await self.get(key=src_key, at=from_),
             at=to_,
         )
 
-    def copy_resolved(
+    async def copy_resolved(
         self,
         src_key: str,
         dst_key: str,
@@ -118,13 +148,16 @@ class Store(ABC):
                 "a descriptor probably references itself"
             )
         dst_store = dst_store or self
-        raw = self.get(src_key, at=from_)
+        raw = await self.get(src_key, at=from_)
         descriptor = CollectionDescriptor.try_decode(raw)
         if descriptor is None:
-            return dst_store.put(dst_key, raw, at=to_)
-        elements = []
-        for index, (scope, element_key) in enumerate(descriptor.elements):
-            element_scope = (ELEMENTS, dst_key, str(index))
+            return await dst_store.put(dst_key, raw, at=to_)
+        elements = [
+            ((ELEMENTS, dst_key, str(index)), element_key)
+            for index, (_scope, element_key) in enumerate(descriptor.elements)
+        ]
+        # the elements are independent: copy them all at once
+        await asyncio.gather(*(
             self.copy_resolved(
                 element_key,
                 element_key,
@@ -133,8 +166,9 @@ class Store(ABC):
                 dst_store=dst_store,
                 _depth=_depth + 1,
             )
-            elements.append((element_scope, element_key))
-        return dst_store.write_collection(
+            for (scope, element_key), (element_scope, _key) in zip(descriptor.elements, elements)
+        ))
+        return await dst_store.write_collection(
             dst_key, elements, at=to_, element_type=descriptor.element_type
         )
 
@@ -142,7 +176,7 @@ class Store(ABC):
     # One logical key, many stored objects. Concrete on the ABC and built only over
     # put/get, so every backend -- including the in-memory test double -- gets them.
 
-    def _read(
+    async def _read(
         self,
         key: str,
         *,
@@ -156,21 +190,22 @@ class Store(ABC):
                 f"collection nesting exceeded {MAX_DEPTH} at {'/'.join((*at, key))}; "
                 "a descriptor probably references itself"
             )
-        raw = self.get(key, at=at)
+        raw = await self.get(key, at=at)
         if descriptor := CollectionDescriptor.try_decode(raw):
-            return [
+            # fetched all at once; gather keeps descriptor order whatever finishes first
+            return list(await asyncio.gather(*(
                 self._read(element_key, at=(*at, *scope), as_json=as_json, depth=depth + 1)
                 for scope, element_key in descriptor.elements
-            ]
+            )))
         return json.loads(raw.decode("utf-8")) if as_json else raw
 
-    def read(self, key: str, at: tuple[str, ...] = ()) -> bytes | list:
-        return self._read(key, at=at, as_json=False, depth=0)
+    async def read(self, key: str, at: tuple[str, ...] = ()) -> bytes | list:
+        return await self._read(key, at=at, as_json=False, depth=0)
 
-    def read_json(self, key: str, at: tuple[str, ...] = ()) -> Any:
-        return self._read(key, at=at, as_json=True, depth=0)
+    async def read_json(self, key: str, at: tuple[str, ...] = ()) -> Any:
+        return await self._read(key, at=at, as_json=True, depth=0)
 
-    def write_collection(
+    async def write_collection(
         self,
         key: str,
         elements: "Sequence[tuple[tuple[str, ...], str]]",
@@ -190,10 +225,10 @@ class Store(ABC):
             elements=tuple((tuple(scope), k) for scope, k in elements),
             element_type=element_type,
         )
-        return self.put_json(key, descriptor.encode(), at=at)
+        return await self.put_json(key, descriptor.encode(), at=at)
 
-    def width(self, key: str, at: tuple[str, ...] = ()) -> int:
-        raw = self.get(key, at=at)
+    async def width(self, key: str, at: tuple[str, ...] = ()) -> int:
+        raw = await self.get(key, at=at)
         if descriptor := CollectionDescriptor.try_decode(raw):
             return descriptor.count
         try:
@@ -207,5 +242,36 @@ class Store(ABC):
             return len(value)
         raise CollectionError(f"{'/'.join((*at, key))} is not a collection")
 
-    def is_collection(self, key: str, at: tuple[str, ...] = ()) -> bool:
-        return CollectionDescriptor.try_decode(self.get(key, at=at)) is not None
+    async def is_collection(self, key: str, at: tuple[str, ...] = ()) -> bool:
+        return CollectionDescriptor.try_decode(await self.get(key, at=at)) is not None
+
+
+class BlockingStore(Store):
+    """A store whose client blocks (files, boto3): it implements synchronous primitives,
+    and the async methods run them in the store's threads (:func:`blocking`), so the
+    backend cannot block the event loop by mistake. The threads are the process's
+    bound on blocking calls in flight (:data:`MAX_IN_FLIGHT`)."""
+
+    async def put(self, key: str, data: bytes, at: tuple[str, ...] = ()) -> str:
+        return await blocking(self._put, key, data, at)
+
+    async def get(self, key: str, at: tuple[str, ...] = ()) -> bytes:
+        return await blocking(self._get, key, at)
+
+    async def has(self, key: str, at: tuple[str, ...] = ()) -> bool:
+        return await blocking(self._has, key, at)
+
+    async def list(self, at: tuple[str, ...] = ()) -> list[str]:
+        return await blocking(self._list, at)
+
+    @abstractmethod
+    def _put(self, key: str, data: bytes, at: tuple[str, ...]) -> str: ...
+
+    @abstractmethod
+    def _get(self, key: str, at: tuple[str, ...]) -> bytes: ...
+
+    @abstractmethod
+    def _has(self, key: str, at: tuple[str, ...]) -> bool: ...
+
+    @abstractmethod
+    def _list(self, at: tuple[str, ...]) -> list[str]: ...

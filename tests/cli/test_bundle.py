@@ -8,6 +8,7 @@ Each case mirrors how a runner will use the bundle: mounted read-only at ``/opt/
 the bundle's ``cascade`` as the entrypoint, a non-root user (the local docker runner maps
 the host user), a writable ``/cascade``, and the host file store mounted inside it.
 """
+import asyncio
 import json
 import os
 import shutil
@@ -53,8 +54,8 @@ def test_the_bundle_wraps_a_command_in_an_unmodified_image(tmp_path, case):
     image, extra, command = CASES[case]
     store_root = tmp_path / "store"
     store_root.mkdir()
-    FileStore(FileConfig(root=str(store_root), scope=SCOPE)).put_json(
-        "text", "hello", at=("src",))
+    asyncio.run(FileStore(FileConfig(root=str(store_root), scope=SCOPE)).put_json(
+        "text", "hello", at=("src",)))
 
     inside = FileConfig(root="/cascade/store", scope=SCOPE)
     spec = RunSpec(
@@ -79,5 +80,5 @@ def test_the_bundle_wraps_a_command_in_an_unmodified_image(tmp_path, case):
     r = subprocess.run(argv, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stdout + r.stderr
     out = FileStore(FileConfig(root=str(store_root), scope=SCOPE + ("upper",)))
-    assert json.loads(out.get("upper")) == "HELLO"
-    assert out.has(DONE_MARKER)
+    assert json.loads(asyncio.run(out.get("upper"))) == "HELLO"
+    assert asyncio.run(out.has(DONE_MARKER))

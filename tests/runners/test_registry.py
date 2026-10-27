@@ -146,7 +146,7 @@ async def test_echo_writes_a_stub_for_each_output_port(tmp_path):
     )
     rc = await runner.run(RunSpec(name="detect", run_id="r1", instance_id="r1/main/d", store_out=store))
     assert rc == 0
-    written = store.get_json("dets")
+    written = await store.get_json("dets")
     # Detection[] is depth 1, so the stub is a list -- a downstream node can fan it
     assert isinstance(written, list)
     assert written[0]["port"] == "dets"

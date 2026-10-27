@@ -53,10 +53,10 @@ class RunnerEcho(RunnerCoroBase):
         # must fail here, not pass silently because the stub never looked
         if spec.store_in is not None and spec.inputs is not None:
             for binding in spec.inputs.inputs:
-                spec.store_in.read(binding.key, at=binding.scope)
+                await spec.store_in.read(binding.key, at=binding.scope)
         if spec.store_out is not None:
             for port, depth in self.outputs.items():
-                spec.store_out.put_json(port, self._stub(port, depth))
+                await spec.store_out.put_json(port, self._stub(port, depth))
         return 0
 
     def _invoke(self, spec: RunSpec) -> Awaitable[int]:

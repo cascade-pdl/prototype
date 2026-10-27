@@ -97,5 +97,5 @@ async def test_a_fan_runs_no_wider_than_its_limits(tmp_path, limit, limits, expe
         inputs={"numbers": [1, 2, 3, 4, 5]}
     )
 
-    assert result.fetch("done") == [1, 2, 3, 4, 5]
+    assert await result.fetch("done") == [1, 2, 3, 4, 5]
     assert _peak(log) == expected

@@ -3,6 +3,7 @@
 The behaviour itself (staging, exit codes, signal forwarding, marker) is tested end to end
 through the real command in ``tests/cli/test_node_wrap.py``.
 """
+import asyncio
 import signal
 import sys
 
@@ -33,8 +34,8 @@ def write_out(node: Node) -> list[str]:
 
 def test_a_successful_run_collects_and_marks_done(node):
     assert run_wrapped(node, write_out(node)) == 0
-    assert node.store_out.get_json("out") == "done"
-    assert node.store_out.has(DONE_MARKER)
+    assert asyncio.run(node.store_out.get_json("out")) == "done"
+    assert asyncio.run(node.store_out.has(DONE_MARKER))
 
 
 def test_the_previous_signal_handlers_are_restored(node):

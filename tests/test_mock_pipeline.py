@@ -96,11 +96,11 @@ async def test_flat_pipeline_runs_as_real_subprocesses(tmp_path):
     assert code == 0
 
     # source wrote the integers into its own slot
-    assert store.get_json("numbers", at=("src",)) == list(range(10))
+    assert await store.get_json("numbers", at=("src",)) == list(range(10))
 
     # detect produced 3-8 detections per integer, addressed via the output alias
     (scope, key), = runner.output_scopes().values()
-    detections = store.get_json(key, at=scope)
+    detections = await store.get_json(key, at=scope)
     assert 30 <= len(detections) <= 80
     assert {d["number"] for d in detections} == set(range(10))
     assert all(0.0 <= d["score"] <= 1.0 for d in detections)
@@ -112,7 +112,7 @@ async def test_args_reach_the_subprocess(tmp_path):
     plan = _with_this_interpreter(_plan(FLAT))
     plan.node_graphs["main"].node("src").args = {"count": 4}
     _code, _runner, store = await _run(plan, tmp_path)
-    assert store.get_json("numbers", at=("src",)) == [0, 1, 2, 3]
+    assert await store.get_json("numbers", at=("src",)) == [0, 1, 2, 3]
 
 
 @pytest.mark.asyncio
@@ -142,8 +142,8 @@ async def test_the_scattered_pipeline_runs(tmp_path):
 
     (scope, key), = runner.output_scopes().values()
     # the fan wrote a descriptor; read resolves it, and a consumer cannot tell
-    assert store.is_collection(key, at=scope)
-    gathered = store.read_json(key, at=scope)
+    assert await store.is_collection(key, at=scope)
+    gathered = await store.read_json(key, at=scope)
 
     # gather adds exactly one array level: 10 lanes, each a list of detections
     assert len(gathered) == 10

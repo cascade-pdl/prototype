@@ -127,7 +127,7 @@ def test_dag_runner_rejects_an_unknown_dag(plan):
 @pytest.mark.asyncio
 async def test_m1_two_node_dag_runs_end_to_end(plan, stores, tmp_path):
     # the dag's own input, as the executor will stage it
-    stores.put_json("src", {"path": "moths.jpg"}, at=("$in",))
+    await stores.put_json("src", {"path": "moths.jpg"}, at=("$in",))
     dag_inputs = InputBindings(inputs=(InputBinding(port="src", scope=("$in",), key="src", type=TypeExpr.parse("string")),))
 
     code = await DagRunner("main", plan).run(
@@ -142,8 +142,8 @@ async def test_m1_two_node_dag_runs_end_to_end(plan, stores, tmp_path):
     assert code == 0
 
     # both nodes wrote into their own slots, beneath the dag's
-    assert stores.get_json("items", at=("load",))[0]["port"] == "items"  # Item[] -> list
-    assert stores.get_json("scored", at=("score",))["port"] == "scored"
+    assert (await stores.get_json("items", at=("load",)))[0]["port"] == "items"  # Item[] -> list
+    assert (await stores.get_json("scored", at=("score",)))["port"] == "scored"
 
     # the layout mirrors the dag, under the deployment's base scope
     written = sorted(
@@ -162,7 +162,7 @@ async def test_m1_two_node_dag_runs_end_to_end(plan, stores, tmp_path):
 async def test_the_downstream_node_reads_the_upstream_output(plan, stores):
     """Nothing is staged: score's binding points into load's slot, and the bytes there
     are the ones load wrote."""
-    stores.put_json("src", {"path": "x"}, at=("$in",))
+    await stores.put_json("src", {"path": "x"}, at=("$in",))
     runner = DagRunner("main", plan)
     await runner.run(
         RunSpec(
@@ -174,14 +174,14 @@ async def test_the_downstream_node_reads_the_upstream_output(plan, stores):
     )
     graph = plan.node_graphs["main"]
     binding = resolve_node(graph.node("score"), plan, graph, InputBindings()).input_for("items")
-    assert stores.get_json(binding.key, at=binding.scope)[0]["runnable"] == "load"
+    assert (await stores.get_json(binding.key, at=binding.scope))[0]["runnable"] == "load"
 
 
 @pytest.mark.asyncio
 async def test_instance_paths_nest_under_the_dag(plan, stores):
     """Each node's instance_id is the dag's path plus its own name."""
     seen = []
-    stores.put_json("src", {}, at=("$in",))
+    await stores.put_json("src", {}, at=("$in",))
     runner = DagRunner("main", plan)
     original = runner._runner_for
 
@@ -264,7 +264,7 @@ def test_alias_chases_through_a_subdag(nested_plan):
 @pytest.mark.asyncio
 async def test_m4_a_nested_dag_runs_by_recursion(nested_plan, tmp_path):
     store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main")))
-    store.put_json("src", {"p": "x"}, at=("$in",))
+    await store.put_json("src", {"p": "x"}, at=("$in",))
 
     code = await DagRunner("main", nested_plan).run(
         RunSpec(
@@ -289,7 +289,7 @@ async def test_m4_a_nested_dag_runs_by_recursion(nested_plan, tmp_path):
         "r1/main/p/$in/raw",
         "r1/main/p/t/clean",
     ]
-    assert store.get_json("raw", at=("p", "$in")) == store.get_json("items", at=("l",))
+    assert await store.get_json("raw", at=("p", "$in")) == await store.get_json("items", at=("l",))
 
 
 DEEP = """
@@ -325,7 +325,7 @@ async def test_inputs_reach_two_levels_down_one_boundary_at_a_time(tmp_path):
     only its own dag's slot."""
     plan = compile_pipeline(Pipeline.decode(safe_load(DEEP)))
     store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main")))
-    store.put_json("src", "x", at=("$in",))
+    await store.put_json("src", "x", at=("$in",))
     code = await DagRunner("main", plan).run(
         RunSpec(
             name="main", run_id="r1", instance_id="r1/main", store_out=store,
@@ -335,9 +335,9 @@ async def test_inputs_reach_two_levels_down_one_boundary_at_a_time(tmp_path):
         )
     )
     assert code == 0
-    assert store.get_json("b", at=("m", "i", "$in")) == "x"
-    assert store.get_json("a", at=("m", "i", "$in")) == store.get_json("items", at=("l",))
-    assert store.has("out", at=("m", "i", "u"))
+    assert await store.get_json("b", at=("m", "i", "$in")) == "x"
+    assert await store.get_json("a", at=("m", "i", "$in")) == await store.get_json("items", at=("l",))
+    assert await store.has("out", at=("m", "i", "u"))
 
 
 @pytest.mark.asyncio
@@ -345,7 +345,7 @@ async def test_a_subdag_node_resolves_its_input_through_the_alias(nested_plan, t
     """A consumer of a dag node binds to where the bytes actually are, not to the
     dag node's own scope."""
     store = FileStore(FileConfig(root=str(tmp_path), scope=("r1", "main")))
-    store.put_json("src", {"p": "x"}, at=("$in",))
+    await store.put_json("src", {"p": "x"}, at=("$in",))
     await DagRunner("main", nested_plan).run(
         RunSpec(
             name="main", run_id="r1", instance_id="r1/main", store_out=store,
@@ -356,7 +356,7 @@ async def test_a_subdag_node_resolves_its_input_through_the_alias(nested_plan, t
     )
     # what a hypothetical downstream of 'p' would be told
     scope, key = resolve_dag_output(nested_plan, "prep", "ready")
-    assert store.get_json(key, at=("p", *scope))[0]["runnable"] == "tidy"
+    assert (await store.get_json(key, at=("p", *scope)))[0]["runnable"] == "tidy"
 
 # --- fail fast: a failure stops its siblings ----------------------------------
 
