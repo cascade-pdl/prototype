@@ -24,7 +24,7 @@ refs:
   - name: numbers
     runner: subprocess
     resources: { cpu: 0.5, memory: 256MiB }
-    config: { cmd: ["python", "numbers.py"], wrap: false }
+    config: { cmd: ["python", "source.py"], wrap: false }
     input: []
     output: [ { name: numbers, type: "float[]" } ]
 
