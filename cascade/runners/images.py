@@ -10,6 +10,12 @@ The directory is hashed again first. A plan compiled before the directory change
 an image that would be built from different content, so that is refused rather than
 built under a name that no longer describes it.
 
+Each built image is labelled with the directory it was built from and that directory's
+hash (:data:`LABEL_CONTEXT`, :data:`LABEL_HASH`). Names cannot say whose an image is
+(``cascade/<dir name>`` is shared by every project with a ``refs/numbers/``), the
+labels can: :func:`built_images` tells an image the directory builds today from one it
+built before and no longer does, which is what ``cascade images prune`` removes.
+
 Then every docker ref's image, built or named, is **resolved once** (``resolve_images``):
 its id, entrypoint and default command, pulled first if the backend allows. Runners are
 handed that, so a fan of a thousand lanes asks Docker nothing per instance, and every
@@ -21,6 +27,7 @@ import os
 import shutil
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
@@ -33,11 +40,25 @@ from cascade.plan.build_context import (
     uses_cascade,
 )
 from cascade.plan.plan import Plan
-from cascade.docker.images import BuildFailed, ImageConfig, build_image, image_exists
+from cascade.docker.images import (
+    BuildFailed,
+    ImageConfig,
+    LocalImage,
+    build_image,
+    image_exists,
+    list_images,
+)
 from cascade.runners.docker import DockerImageError, inspect_image
 from cascade.substrate.backends import Backend, BackendKind, LocalConfig
 from cascade.substrate.naming import built_image
 from cascade.substrate.placement import PlacementMap
+
+
+LABEL_CONTEXT = "cascade.context"
+"""The absolute path of the directory a built image was built from."""
+
+LABEL_HASH = "cascade.hash"
+"""That directory's full content hash when it was built (the name carries a prefix)."""
 
 
 class ImageBuildError(Exception):
@@ -74,12 +95,12 @@ async def prepare_images(
                 f"ref {placement.ref!r}: {ref.build} has changed since the plan was "
                 "compiled; compile it again"
             )
-        wanted.setdefault(built_image(ref.build, ref.build_hash), context)
+        wanted.setdefault(built_image(ref.build, ref.build_hash), (context, ref.build_hash))
 
     built = []
-    for image, context in wanted.items():
+    for image, (context, build_hash) in wanted.items():
         if not await image_exists(image):
-            await _build(image, context)
+            await _build(image, context, {LABEL_CONTEXT: str(context), LABEL_HASH: build_hash})
             built.append(image)
     return built
 
@@ -128,7 +149,7 @@ async def resolve_images(
     return {ref: resolved[image] for ref, image in image_for.items()}
 
 
-async def _build(image: str, context: Path) -> None:
+async def _build(image: str, context: Path, labels: dict[str, str]) -> None:
     """``docker build`` into ``image``, with cascade's source as a named context when the
     Dockerfile asks for it."""
     with tempfile.TemporaryDirectory(prefix="cascade-source-") as staged:
@@ -144,8 +165,47 @@ async def _build(image: str, context: Path) -> None:
             build_contexts[CASCADE_CONTEXT] = Path(staged)
         print(f"cascade: building {image} from {context}", file=sys.stderr, flush=True)
         try:
-            await build_image(image, context, build_contexts)
+            await build_image(image, context, build_contexts, labels)
         except BuildFailed as e:
             raise ImageBuildError(
                 f"building {image} from {context} failed (docker exit {e.code}):\n{e.tail}"
             )
+
+
+@dataclass(frozen=True)
+class BuiltImage:
+    """A local image cascade built, and whether it is still what its directory builds."""
+
+    image: LocalImage
+    context: Path | None
+    """The directory it was built from; ``None`` for an image built before labels."""
+    status: str
+    """``current``: the directory builds this image today. ``stale``: it has changed
+    since. ``gone``: it no longer exists, or is no longer a build directory.
+    ``unlabelled``: built before labels, so its directory is unknown."""
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(t for t in self.image.tags if t.startswith("cascade/")) or (self.image.id,)
+
+
+async def built_images() -> list[BuiltImage]:
+    """Every local ``cascade/*`` image, with its status (see :class:`BuiltImage`).
+
+    Status is decided per directory, by hashing it now, so it needs no project or
+    pipeline and cannot call another project's current image stale."""
+    found = []
+    for image in await list_images("cascade/*"):
+        where, built_hash = image.labels.get(LABEL_CONTEXT), image.labels.get(LABEL_HASH)
+        if not where or not built_hash:
+            found.append(BuiltImage(image, None, "unlabelled"))
+            continue
+        context = Path(where)
+        if check_context(context):
+            status = "gone"
+        elif context_hash(context) == built_hash:
+            status = "current"
+        else:
+            status = "stale"
+        found.append(BuiltImage(image, context, status))
+    return found

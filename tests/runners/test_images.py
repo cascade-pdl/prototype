@@ -118,6 +118,17 @@ async def test_an_existing_name_is_an_up_to_date_image(docker, project):
 
 
 @pytest.mark.asyncio
+async def test_a_built_image_is_labelled_with_its_directory_and_hash(docker, project):
+    """What ``cascade images`` reads back: names cannot say whose an image is."""
+    plan, placements = compiled(project)
+    await prepare_images(plan, placements, [uncapped_local()], str(project))
+    context = (project / "refs" / "tool").resolve()
+    build_hash = plan.run_config["a"].config.build_hash
+    assert f"--label cascade.context={context}" in builds(docker)[0]
+    assert f"--label cascade.hash={build_hash}" in builds(docker)[0]
+
+
+@pytest.mark.asyncio
 async def test_cascade_source_is_passed_only_to_a_dockerfile_that_uses_it(docker, project):
     plan, placements = compiled(project)
     await prepare_images(plan, placements, [uncapped_local()], str(project))

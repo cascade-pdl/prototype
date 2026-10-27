@@ -88,6 +88,12 @@ the named build context `cascade` (`COPY --from=cascade . /src/cascade`), which 
 fills from this checkout; cascade's source then counts towards the hash. Pin `FROM`
 images by digest: a moving tag can change under the same hash.
 
+Each built image is labelled with its directory and that directory's hash, so the ones
+left behind by a change can be found: `cascade images list` shows this project's, as
+`current` (what the directory builds today), `stale` or `gone`; `cascade images prune`
+removes the stale and gone ones (`--all` for every project's, `--unlabelled` for images
+built before the labels).
+
 ## S3 stores and credentials in containers
 
 A deployment's `store:` may be S3 or an S3-compatible service (garage, MinIO), named by
